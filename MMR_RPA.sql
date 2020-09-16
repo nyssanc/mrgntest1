@@ -1,3 +1,5 @@
+PURGE RECYCLEBIN;
+
 
 
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
@@ -307,8 +309,6 @@ SELECT * FROM (with A AS (select RPA.*,
                                 IPC.BID_OR_PRCA_NAME,
                                 IPC.LOCAL_PRICING_GROUP_ID LPG_ID,
                                 IPC.LPG_DESC,
-                                IPC.GPO_NUMBER, 
-                                IPC.GPO_NAME,
                                 ------FOR THE VAR COST and orign source CALCULATIONs ONLY--------
                                 PRICE_SOURCE, 
                                 ITEM_AS400_NUM,                          ITEM_E1_NUM,
@@ -432,22 +432,97 @@ SELECT DISTINCT
        TRIG.TIER_BASE_FLG            AS TRIG_CONT_TIER_BASE_FLG,
        ALL_3.ACCT_ITEM_KEY  
 FROM   ALL_3
-    LEFT JOIN BSLN ON ALL_3.ACCT_ITEM_KEY = BSLN.ACCT_ITEM_KEY and ALL_3.BL_MCK_CONT = BSLN.BL_MCK_CONT
-    LEFT JOIN CURR ON ALL_3.ACCT_ITEM_KEY = CURR.ACCT_ITEM_KEY AND ALL_3.CURR_MCK_CONT = CURR.CURR_MCK_CONT 
+    LEFT JOIN BSLN ON ALL_3.ACCT_ITEM_KEY = BSLN.ACCT_ITEM_KEY and ALL_3.BL_MCK_CONT      = BSLN.BL_MCK_CONT
+    LEFT JOIN CURR ON ALL_3.ACCT_ITEM_KEY = CURR.ACCT_ITEM_KEY AND ALL_3.CURR_MCK_CONT    = CURR.CURR_MCK_CONT 
     LEFT JOIN TRIG ON ALL_3.ACCT_ITEM_KEY = TRIG.ACCT_ITEM_KEY AND ALL_3.BL_TRIG_MCK_CONT = TRIG.BL_TRIG_MCK_CONT
-    );
+    );--END REGION
+    
+--REGION GPO, HIN, DEA, RX INFO
+DROP TABLE PAL_RPA_GPO_DEA_HIN; COMMIT;
+CREATE TABLE PAL_RPA_GPO_DEA_HIN AS ( SELECT * FROM (
+    WITH ACCOUNTS AS (SELECT M.SHIP_TO
+                      FROM MRGN_EU.PAL_RPA_CASES RPA  
+                             JOIN   MRGN_EU.MMR_STATUS_FINAL M on RPA.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY),
+    
+    CTE as (SELECT GPO.DIM_CUST_CURR_ID                                       as "CUST" 
+                        ,to_char(GPO.MMBRSHIP_START_DT, 'MM/DD/YYYY')               as "GPOD"
+                        ,to_char(GPO.PRMRY_AFFLTN_START_DT, 'MM/DD/YYYY')           as "PRMD"
+                        ,GPO.PRMRY_AFFLTN_FLG                                       as "Fl"
+                        ,COT.CLASS_OF_TRADE_NUM                                     as "COTN"
+                        ,COT.CLASS_OF_TRADE_DSC                                     as "COT"
+                        ,GRP.GPO_NUM                                                as "GPO"
+                        ,GPO.GPO_CUST_ACCT_NUM                                      as "GPOID"
+                        ,GRP.GPO_NAME as "GPONAME", PGM.PRGRM_NUM, PGM.PRGRM_DSC, PGM.SUB_PRGRM_NUM, PGM.SUB_PRGRM_DSC
+                        ,0 as "RXGPO", '' as "RXNAME", '' as "RXGPOID"
+            FROM EDWRPT.V_DIM_CUST_CURR cc
+              join ACCOUNTS                             ON SHIP_TO = cc.CUST_NUM
+              join EDWRPT.V_DIM_CUST_GPO GPO            ON GPO.DIM_CUST_CURR_ID = CC.DIM_CUST_CURR_ID
+              right JOIN EDWRPT.V_DIM_GPO GRP           ON GPO.DIM_GPO_ID = GRP.DIM_GPO_ID
+              JOIN EDWRPT.V_DIM_GPO_PRGRM PGM           ON GPO.DIM_GPO_PRGRM_ID = PGM.DIM_GPO_PRGRM_ID
+              JOIN EDWRPT.V_DIM_GPO_CLASS_OF_TRADE COT  ON GPO.DIM_GPO_CLASS_OF_TRADE_ID = COT.DIM_GPO_CLASS_OF_TRADE_ID
+              WHERE GPO.PRMRY_AFFLTN_FLG = 'Y' 
+                AND GPO.GPO_MMBRSHIP_TYPE_DSC IN ('GPO') 
+                AND GPO.PRMRY_AFFLTN_END_DT > SYSDATE
+            UNION
+             SELECT GPO.DIM_CUST_CURR_ID
+                    , '', '', '', 0, '', 0, '', '', 0, '', 0, '', 
+                    GRP.GPO_NUM, 
+                    GRP.GPO_NAME, 
+                    GPO.GPO_CUST_ACCT_NUM
+             FROM EDWRPT.V_DIM_CUST_CURR cc
+              join ACCOUNTS                             ON SHIP_TO = cc.CUST_NUM
+              join EDWRPT.V_DIM_CUST_GPO GPO            ON GPO.DIM_CUST_CURR_ID = CC.DIM_CUST_CURR_ID 
+              right JOIN EDWRPT.V_DIM_GPO GRP           ON GPO.DIM_GPO_ID = GRP.DIM_GPO_ID
+             WHERE GPO.PRMRY_AFFLTN_FLG = 'Y' 
+               AND GPO.GPO_MMBRSHIP_TYPE_DSC IN ('RX') 
+               and GPO.RX_MMBRSHIP_END_DT > SYSDATE
+              ), 
+              
+      CTE2 as (SELECT CTE.CUST, MAX(CTE.GPOD) as "GPODT", MAX(CTE.PRMD) as "PRMDT", MAX(CTE."Fl") as Flag, MAX(CTE.COTN) as COTNum, MAX(CTE.COT) as "GPOCOT"
+                , MAX(CTE.GPO) as "GPO", MAX(CTE.GPONAME) as "NAME"
+                , MAX(CTE.GPOID) as "ID", MAX(CTE.PRGRM_NUM) as "PGMNM", MAX(CTE.PRGRM_DSC) as "PGM", MAX(CTE.SUB_PRGRM_NUM) as "SPGMNM"
+                , MAX(CTE.SUB_PRGRM_DSC) as "SPGM", MAX(CTE.RXGPO) as "RX", MAX(CTE.RXNAME) as "RNAME", MAX(CTE.RXGPOID) as "RXID"
+                FROM CTE
+                GROUP BY CTE.CUST
+              )
+     
+ SELECT DISTINCT
+/*COMMENTED OUT
+      --, CASE WHEN CC.PRCA_NUM = CC.CUST_E1_NUM THEN 'Y' ELSE NULL END as "PRCA Flag"
+      --, CASE WHEN PCCA.PAY55RAN8 = CC.CUST_E1_NUM THEN 'Y' ELSE NULL END as "PCCA Flag"
+      --, CC.BILL_TO_CUST_NUM as "Bill To" */
+      CC.CUST_E1_NUM              as Ship_To
+      , CC.HLTH_INDSTRY_NUM       as HIN
+      , CC.DEA_LIC_NUM            as DEA
+      , CC.DEA_LIC_EXPR_DT        as DEA_Exp_Date
+      , CTE2.COTNum               as GPO_CoT
+      , CTE2.GPOCOT               as GPO_CoT_Name
+      , CTE2.Flag                 as Prmry_GPO_Flag
+      , CTE2.GPO                  as Prmry_GPO_Num
+      , CTE2.NAME                 as Prmry_GPO_Name
+      , CTE2.ID                   as Prmry_GPO_ID
+      , CTE2.GPODT                as GPO_Mmbrshp_St
+      , CTE2.PRMDT                as Prmry_aff_St
+      , CTE2.RX                   as RX_GPO_Num
+      , CTE2.RNAME                as RX_GPO_Name
+      , CTE2.RXID                 as RX_GPO_ID
+      FROM EDWRPT.V_DIM_CUST_CURR CC
+  join ACCOUNTS               ON SHIP_TO = cc.CUST_NUM
+  LEFT JOIN CTE2              ON CC.DIM_CUST_CURR_ID = CTE2.CUST
+  --LEFT JOIN MMSDM910.SRC_E1_MMS_F5521207 PCCA ON CC.BILL_TO_CUST_NUM = PCCA.PAY55CGID
+WHERE CC.SYS_PLTFRM = 'E1'
+AND CC.ACTV_FLG = 'Y'
+--AND CC.CUST_TYPE_CD in ('B', 'X', 'S')
+--AND to_date(to_char(PCCA.PAEFFT+1900000),'YYYYDDD') > SYSDATE --Selects the current PCCA
+));--END REGION
 
-SELECT y.BL_MFG_CONT, y.BL_TRIG_MCK_CONT, y.CURR_MFG_CONT, y.CURR_MCK_CONT FROM MMR_STATUS_FINAL y JOIN
-(
-SELECT ACCT_ITEM_KEY FROM PAL_ATTRBT_FLGS 
-HAVING COUNT(ACCT_ITEM_KEY) >1
-GROUP BY ACCT_ITEM_KEY
-) X ON X.ACCT_ITEM_KEY = Y.ACCT_ITEM_KEY
-;--END REGION
-  
+Ship_To
+      
+
+
 --region jOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
-DROP TABLE PAL_RPA; 
-create table PAL_RPA as
+DROP TABLE PAL_RPA; COMMIT;
+create table PAL_RPA_TEST2 as
 
 /*REPLACE THIS DROP TABLE CREATE TABLE WITH THE INSERT STATEMENT BELOW SO ROWS CAN BE EXCLUDED IN THE FIRST STEP
   INSERT INTO PAL_RPA */
@@ -489,6 +564,7 @@ SELECT  --REGION
         M.CURR_MIN_VAR_CST,      IPC.MN_LPG_PRCA_COST,
         IPC.VAR_CST_CONT,        IPC.VAR_CST_CONT_NAME,
         IPC.VAR_CST_CONT_TYPE,
+        --CASE WHEN VAR_CST_CONT = 
         -----------PRICE-----------
         M.BL_SELL_PRICE,         CASE WHEN M.CURR_SELL_PRICE    is null THEN M.BL_TRIG_SELL_PRICE   ELSE M.CURR_SELL_PRICE    END AS  CURR_SELL_PRICE,        
         M.BL_PRC_RULE,           CASE WHEN M.CURR_PRC_RULE      is null THEN M.BL_TRIG_PRC_RULE     ELSE M.CURR_PRC_RULE      END AS  CURR_PRC_RULE,              
@@ -502,16 +578,24 @@ SELECT  --REGION
         CASE WHEN M.CURR_MARGIN >=0 THEN 0 ELSE  M.CURR_MARGIN * M.CURR_QTY     END AS "3_MON_NM",
         -----------CONTRACT-----------
         M.BL_MCK_CONT,           M.BL_MFG_CONT,        M.BL_MFG_CONT_NAME,        M.BL_CONT_TYPE,         --BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
-        M.BL_TRIG_MCK_CONT,      M.BL_TRIG_MFG_CONT,   M.BL_TRIG_MFG_CONT_NAME,   M.BL_TRIG_CONT_TYPE,    --TRIG_CONT_ATR_ELIG_FLG,      TRIG_CONT_TIER_BASE_FLG,
-        M.CURR_MCK_CONT,         M.CURR_MFG_CONT,      M.CURR_MFG_CONT_NAME,      M.CURR_CONT_TYPE,       --CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
+        --TRIG_CONT_ATR_ELIG_FLG,      TRIG_CONT_TIER_BASE_FLG,
+        --CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
+        CASE WHEN M.CURR_MCK_CONT       is null THEN M.BL_TRIG_MCK_CONT       ELSE M.CURR_MCK_CONT       END AS  CURR_MCK_CONT,
+        CASE WHEN M.CURR_MFG_CONT       is null THEN M.BL_TRIG_MFG_CONT       ELSE M.CURR_MFG_CONT       END AS  CURR_MFG_CONT,
+        CASE WHEN M.CURR_MFG_CONT_NAME  is null THEN M.BL_TRIG_MFG_CONT_NAME  ELSE M.CURR_MFG_CONT_NAME  END AS  CURR_MFG_CONT_NAME,
+        CASE WHEN M.CURR_CONT_TYPE      is null THEN M.BL_TRIG_CONT_TYPE      ELSE M.CURR_CONT_TYPE      END AS  CURR_CONT_TYPE,
         M.BL_ITEM_END_DT,        M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
          --IPC.origin_source of contract
         -----------GPO-----------
         M.BL_CUST_PRIM_GPO_NUM,   M.BL_TRIG_CUST_PRIM_GPO_NUM, 
-        M.CURR_CUST_PRIM_GPO_NUM, IPC.GPO_NUMBER, 
-        IPC.GPO_NAME,
+        M.CURR_CUST_PRIM_GPO_NUM 
+        ,GPO.HIN              ,GPO.DEA            ,GPO.DEA_Exp_Date
+        ,GPO.GPO_CoT          ,GPO.GPO_CoT_Name
+        ,GPO.Prmry_GPO_Flag   ,GPO.Prmry_GPO_Num  ,GPO.Prmry_GPO_Name  ,GPO.Prmry_GPO_ID
+        ,GPO.GPO_Mmbrshp_St   ,GPO.Prmry_aff_St
+        ,GPO.RX_GPO_Num       ,GPO.RX_GPO_Name    ,GPO.RX_GPO_ID
         -----------REP-----------
-        M.MSTR_GRP_NUM,         M.MSTR_GRP_NAME,
+        ,M.MSTR_GRP_NUM,         M.MSTR_GRP_NAME,
         M.ACCT_MGR_NAME,        M.DECISION_MAKER,
         -----------LM-----------
         M.LM_PERC_CAP,          M.LM_OPP_MRGN_PERC, 
@@ -528,7 +612,9 @@ join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY
 JOIN PAL_RPA_IPC IPC  ON M.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
 ---------------------------------------------POOL NAME FOR FILENAME LOGIC-------------------------------------------
 left JOIN PAL_RPA_POOL_E1 PN ON PN.POOL_NUM = PAL_RPA_cases.POOL_NUM
-                             AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
+                            AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
+----------------------------GPO, HIN, DEA, RX GPO, PRMRY GPO--------------------------------------------------------
+left join PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
 -------------NOT TESTED-------------8/12-----------
 --JOIN PAL_ATTRBT_FLGS ON M.ACCT_ITEM_KEY = PAL_ATTRBT_FLGS.ACCT_ITEM_KEY 
