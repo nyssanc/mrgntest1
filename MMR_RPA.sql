@@ -1,8 +1,3 @@
-PURGE RECYCLEBIN;
-
-SELECT * FROM
-MMR_STATUS_FINAL;
-
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
 Create table PAL_RPA_1 as 
 (Select M.ACCT_ITEM_KEY, 
@@ -53,18 +48,19 @@ Create table PAL_RPA_1 as
                                       SUBSTR(mmr."Baseline Date",4,3) AS BL_MON,
 
                                       SUBSTR(mmr."Baseline Date",8,2) AS BL_YR
-                                       /* CASE  WHEN SUBSTR(mmr."Baseline Date",4,3) = 01 THEN 'JAN'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 02 THEN 'FEB'
-                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 03 THEN 'MAR'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 04 THEN 'APR'
-                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 05 THEN 'MAY'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 06 THEN 'JUN'
-                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 07 THEN 'JUL'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 08 THEN 'AUG'
-                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 09 THEN 'SEP'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 10 THEN 'OCT'
-                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 11 THEN 'NOV'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 12 THEN 'DEC'
-                                      END AS BL_MON,*/
+--                                      CASE  WHEN SUBSTR(mmr."Baseline Date",4,3) = 01 THEN 'JAN'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 02 THEN 'FEB'
+--                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 03 THEN 'MAR'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 04 THEN 'APR'
+--                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 05 THEN 'MAY'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 06 THEN 'JUN'
+--                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 07 THEN 'JUL'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 08 THEN 'AUG'
+--                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 09 THEN 'SEP'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 10 THEN 'OCT'
+--                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 11 THEN 'NOV'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 12 THEN 'DEC'
+--                                      END AS BL_MON,
                       FROM MRGN_EU.MMR_EXCLUSIONS mmr
                       ) EX
-                    )        
-)*/
-;--end region 
+                    )   */      
+);--end region 
+
+
 
 --region 2a All Cost Inc Lines
 Create Table PAL_RPA_2a as 
@@ -290,9 +286,10 @@ THIS METHOD WILL ONLY GIVE ME THE CURRENT DETAILS BECAUSE IPC ONLY GRAPS CURRENT
 . CONTRACT ORIGIN SRC
 --------------------------------------------------------------------------------
 */
-drop table PAL_RPA_IPC; commit;
+
 --REGION PULL IPC FOR MY CASES ONLY TAKES 3 min
 CREATE TABLE PAL_RPA_IPC AS 
+
 --REGION START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
 SELECT * FROM (with A AS (select RPA.*, 
                                 to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||RPA.CASE_PREFIX||RPA.CASE_CNTR   as MMR_CASE,
@@ -392,7 +389,6 @@ SELECT c.COMP_COST_LIST_ID,
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY   --var cost info
                   --left join E ON E.COMP_COST_LIST_ID = C.COMP_COST_LIST_ID   --orign source
                   ),
-
 --END REGION
 
 --region %ST'S ON VAR_COST_CONT
@@ -436,25 +432,28 @@ SELECT c.COMP_COST_LIST_ID,
    OVER THE TOTAL COUNT OF ACCT'S BUYING THAT ITEM CONNECTED OR NOT
 */
 GAP_PRCNT AS   (SELECT ROUND(
-                       NO_GAP.CNT/(GAP.CNT+NO_GAP.CNT)
-                       ,2)                             AS PRCNT_CNCTD
+                       sum(NO_GAP.CNT) /
+                       (sum(GAP.CNT)   +
+                       sum(NO_GAP.CNT)
+                             ),2)    AS PRCNT_CNCTD
                       ,NO_GAP.PRICE_SOURCE
                       ,NO_GAP.VAR_CST_CONT
-                      ,NO_GAP.ITEM_E1_NUM
+                      --removed item to get the sum of all customers buying any item on the contract on any other contract,NO_GAP.ITEM_E1_NUM
                 FROM NO_GAP
                   JOIN GAP ON NO_GAP.PRICE_SOURCE = GAP.PRICE_SOURCE
-                          AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM
-                          AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT)--END REGION                        
+                          --AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM  --still want to join on item, because I only want to count customers buying the items on the contract
+                          AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT
+                GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT)
+                  --END REGION                        
 --REGION FINAL TABLE 
 SELECT E.*
       ,G.PRCNT_CNCTD
 FROM E
 LEFT JOIN GAP_PRCNT G ON E.PRICE_SOURCE = G.PRICE_SOURCE
-                     AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
+                    -- AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
                      AND E.VAR_CST_CONT = G.VAR_CST_CONT)
 --END REGION
 ;--END REGION
---END REGION
 --END REGION
 
 --region ATTRIBUTE FLGS
@@ -578,10 +577,6 @@ AND CC.ACTV_FLG = 'Y'
 --AND to_date(to_char(PCCA.PAEFFT+1900000),'YYYYDDD') > SYSDATE --Selects the current PCCA
 ));--END REGION
 
-
---COUNT ST'S UNDER PRCA WITH SAME LOWEST CONTRACT
-SELECT * FROM
-mmr_status_final;
       
 --region jOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
 DROP TABLE PAL_RPA; COMMIT;
