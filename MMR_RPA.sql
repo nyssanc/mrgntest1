@@ -391,7 +391,8 @@ SELECT c.COMP_COST_LIST_ID,
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY   --var cost info
                   --left join E ON E.COMP_COST_LIST_ID = C.COMP_COST_LIST_ID   --orign source
-                  )--,
+                  ),
+
 --END REGION
 
 --region %ST'S ON VAR_COST_CONT
