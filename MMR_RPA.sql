@@ -59,11 +59,12 @@ Create table PAL_RPA_1 as
                                             WHEN SUBSTR(mmr."Baseline Date",4,3) = 07 THEN 'JUL'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 08 THEN 'AUG'
                                             WHEN SUBSTR(mmr."Baseline Date",4,3) = 09 THEN 'SEP'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 10 THEN 'OCT'
                                             WHEN SUBSTR(mmr."Baseline Date",4,3) = 11 THEN 'NOV'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 12 THEN 'DEC'
-                                      END AS BL_MON,--
+                                      END AS BL_MON,*/
                       FROM MRGN_EU.MMR_EXCLUSIONS mmr
                       ) EX
-                    )   */      
-);--end region 
+                    )        
+)*/
+;--end region 
 
 --region 2a All Cost Inc Lines
 Create Table PAL_RPA_2a as 
@@ -372,27 +373,87 @@ SELECT * FROM (with A AS (select RPA.*,
                                                              AND sub1.ITEM = sub2.ITEM
                                                              AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
                                         )WHERE RNK = 1
-                        )--,
- --end region
-
---region CONTRACT ORIGIN SRC
-                  /*E AS (
-                  SELECT c.COMP_COST_LIST_ID,
-                               O.CHY55OSRC   as ORGN_SRC
-                        FROM      C
-                            JOIN  MMSDM910.SRC_E1_MMS_F5521010 O ON    O.CHY55CONID = C.MCK_CNTRCT_ID
-                        WHERE MMSDM.CONVERT_JDE_DATEN(O.CHY55VEFFT) > SYSDATE
-                        )*/
---END REGION    
+                        ),--end region
+      --region CONTRACT ORIGIN SRC
+/*X AS (
+SELECT c.COMP_COST_LIST_ID,
+             O.CHY55OSRC   as ORGN_SRC
+      FROM      C
+          JOIN  MMSDM910.SRC_E1_MMS_F5521010 O ON    O.CHY55CONID = C.MCK_CNTRCT_ID
+      WHERE MMSDM.CONVERT_JDE_DATEN(O.CHY55VEFFT) > SYSDATE
+      )*/
+--END REGION   
 
 --REGION COMBINE THE CASE, IPC, VAR COST AND ORIGIN SOURCE DATA.
-              SELECT C.*,
+  E AS       (SELECT C.*,
                      D.*
                      --,E.ORGN_SRC
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY   --var cost info
                   --left join E ON E.COMP_COST_LIST_ID = C.COMP_COST_LIST_ID   --orign source
-                  );
+                  ),
+--END REGION
+
+--region %ST'S ON VAR_COST_CONT
+/* STEP 1
+  IN THE FIRST STEP I GATHER VAR COST LINES FROM MY CASE DATA BY ACCT, ITEM, VAR_COST_CONT, AND PRC_SRC WHICH COULD BE BID, PRCA, OR LPG.
+  I NEED TO JOIN OUT TO ALL THE IPC DATA TO GET A BETTER COUNT OF ACCT'S ON AND OFF THE CONTRACT
+  I FLAG EACH LINE BY WHETHER OR NOT IT IS COSTING ON THE LOWEST GROUP CONTRACT.
+  THIS IS FOR E1 ONLY CURRENTLY
+*/
+    F  as (SELECT  --ACCT_ITEM_KEY,-- I REMOVED THIS BECAUSE I'M WORKING OUT TO LINES THAT AREN'T IN MY MODEL
+                   B.SHIP_TO
+                  ,B.ITEM_E1_NUM
+                  ,E.VAR_CST_CONT
+                  ,B.PRICE_SOURCE
+                  ,CASE WHEN B.COMP_COST_CONT_ID = E.VAR_CST_CONT THEN 'N' ELSE 'Y' END AS GAP --NEEDS TO BE COMPARING THE CONTRACT FROM ALL IPC DATA TO THE VAR COST CONTRACT FROM MY DATA
+            FROM E
+              JOIN B ON E.PRICE_SOURCE = B.PRICE_SOURCE
+                    AND E.ITEM_E1_NUM = B.ITEM_E1_NUM
+            WHERE B.VAR_COST ='Y'
+                  and B.sys_pltfrm = 'E1'),
+-- REGION STEPS 2 AND 3 
+/*I SEPERATE MY DATA BY THE GAP FLAG AND COUNT THE ACCT'S BY ITEM AND PRICE SOURCE TO BE DIVIDED LATER
+  I NEED TO INCLUDE THE VAR_COST_CONT AND ITEM BECAUSE THE % IS ONLY IMPORTANT IF CUSTOMERS ARE 
+  PURCHASING THE SAME ITEM ON DIFFERENT CONTRACTS */
+     NO_GAP as (SELECT COUNT(SHIP_TO) AS CNT
+                      ,ITEM_E1_NUM
+                      ,VAR_CST_CONT
+                      ,PRICE_SOURCE
+                FROM F
+                WHERE GAP = 'N'
+                GROUP BY ITEM_E1_NUM, PRICE_SOURCE, VAR_CST_CONT),
+     GAP as (SELECT COUNT(SHIP_TO) AS CNT
+                   ,ITEM_E1_NUM
+                   ,VAR_CST_CONT
+                   ,PRICE_SOURCE
+             FROM F
+             WHERE GAP = 'Y'
+             GROUP BY ITEM_E1_NUM, PRICE_SOURCE,VAR_CST_CONT), --END REGION
+/* STEP 4
+   WHERE THE ITEM, VAR_COST_CONT AND PRICE SOURCE MATCHES I CAN CALCULATE THE PERCENTAGE OF CONNECTED ACCT'S
+   OVER THE TOTAL COUNT OF ACCT'S BUYING THAT ITEM CONNECTED OR NOT
+*/
+GAP_PRCNT AS   (SELECT ROUND(
+                       NO_GAP.CNT/(GAP.CNT+NO_GAP.CNT)
+                       ,2)                             AS PRCNT_CNCTD
+                      ,NO_GAP.PRICE_SOURCE
+                      ,NO_GAP.VAR_CST_CONT
+                      ,NO_GAP.ITEM_E1_NUM
+                FROM NO_GAP
+                  JOIN GAP ON NO_GAP.PRICE_SOURCE = GAP.PRICE_SOURCE
+                          AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM
+                          AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT)--END REGION
+                          
+--REGION FINAL TABLE 
+SELECT E.*
+      ,G.PRCNT_CNCTD
+FROM E
+LEFT JOIN GAP_PRCNT G ON E.PRICE_SOURCE = G.PRICE_SOURCE
+                     AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
+                     AND E.VAR_CST_CONT = G.VAR_CST_CONT)
+--END REGION
+;
 --END REGION
 --END REGION
 
