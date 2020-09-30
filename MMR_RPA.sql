@@ -286,10 +286,18 @@ THIS METHOD WILL ONLY GIVE ME THE CURRENT DETAILS BECAUSE IPC ONLY GRAPS CURRENT
 . CONTRACT ORIGIN SRC
 --------------------------------------------------------------------------------
 */
-
+SELECT DISTINCT
+       --ACCT_ITEM_KEY,
+       PRICE_SOURCE_PCCA,
+       VAR_CST_CONT,
+       case when VAR_CST_CONT = COMP_COST_CONT_ID then 'Y' else 'N' end as PCCA_CNCTD
+FROM PAL_RPA_IPC 
+where PRICE_SOURCE_PCCA = ship_to 
+  and VAR_COST = 'Y'
+;
 --REGION PULL IPC FOR MY CASES ONLY TAKES 3 min
+DROP TABLE PAL_RPA_IPC;
 CREATE TABLE PAL_RPA_IPC AS 
-
 --REGION START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
 SELECT * FROM (with A AS (select RPA.*, 
                                 to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||RPA.CASE_PREFIX||RPA.CASE_CNTR   as MMR_CASE,
@@ -388,11 +396,23 @@ SELECT c.COMP_COST_LIST_ID,
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY   --var cost info
                   --left join E ON E.COMP_COST_LIST_ID = C.COMP_COST_LIST_ID   --orign source
-                  ),
---END REGION
+                  ),--END REGION
+                  
+--region PCCA_VC_FLAG
+/*NOTES
+FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO CONNECTED TO THE VAR_COST_CONT*/
+  pcca_vc_flg as (SELECT DISTINCT
+                         PRICE_SOURCE_PCCA, 
+                         --SHIP_TO, 
+                         VAR_CST_CONT, 
+                         --COMP_COST_CONT_ID,
+                         case when VAR_CST_CONT = COMP_COST_CONT_ID then 'Y' else 'N' end as PCCA_CNCTD
+                  FROM E 
+                  where PRICE_SOURCE_PCCA = ship_to 
+                    and VAR_COST = 'Y'),--END REGION
 
 --region %ST'S ON VAR_COST_CONT
-/* STEP 1
+/* STEP 1 NOTES
   IN THE FIRST STEP I GATHER VAR COST LINES FROM MY CASE DATA BY ACCT, ITEM, VAR_COST_CONT, AND PRC_SRC WHICH COULD BE BID, PRCA, OR LPG.
   I NEED TO JOIN OUT TO ALL THE IPC DATA TO GET A BETTER COUNT OF ACCT'S ON AND OFF THE CONTRACT
   I FLAG EACH LINE BY WHETHER OR NOT IT IS COSTING ON THE LOWEST GROUP CONTRACT.
@@ -410,7 +430,8 @@ SELECT c.COMP_COST_LIST_ID,
           WHERE B.VAR_COST ='Y'
                 and B.sys_pltfrm = 'E1'),
 -- REGION STEPS 2 AND 3 
-/*I SEPERATE MY DATA BY THE GAP FLAG AND COUNT THE ACCT'S BY ITEM AND PRICE SOURCE TO BE DIVIDED LATER
+/*NOTES 
+  I SEPERATE MY DATA BY THE GAP FLAG AND COUNT THE ACCT'S BY ITEM AND PRICE SOURCE TO BE DIVIDED LATER
   I NEED TO INCLUDE THE VAR_COST_CONT AND ITEM BECAUSE THE % IS ONLY IMPORTANT IF CUSTOMERS ARE 
   PURCHASING THE SAME ITEM ON DIFFERENT CONTRACTS */
      NO_GAP as (SELECT COUNT(SHIP_TO) AS CNT
@@ -428,9 +449,9 @@ SELECT c.COMP_COST_LIST_ID,
              WHERE GAP = 'Y'
              GROUP BY ITEM_E1_NUM, PRICE_SOURCE,VAR_CST_CONT), --END REGION
 --REGION STEP 4 GAP PERCENTAGE
-/*   WHERE THE ITEM, VAR_COST_CONT AND PRICE SOURCE MATCHES I CAN CALCULATE THE PERCENTAGE OF CONNECTED ACCT'S
-   OVER THE TOTAL COUNT OF ACCT'S BUYING THAT ITEM CONNECTED OR NOT
-*/
+/* NOTES
+   WHERE THE ITEM, VAR_COST_CONT AND PRICE SOURCE MATCHES I CAN CALCULATE THE PERCENTAGE OF CONNECTED ACCT'S
+   OVER THE TOTAL COUNT OF ACCT'S BUYING THAT ITEM CONNECTED OR NOT*/
 GAP_PRCNT AS   (SELECT ROUND(
                        sum(NO_GAP.CNT) /
                        (sum(GAP.CNT)   +
@@ -441,20 +462,25 @@ GAP_PRCNT AS   (SELECT ROUND(
                       --removed item to get the sum of all customers buying any item on the contract on any other contract,NO_GAP.ITEM_E1_NUM
                 FROM NO_GAP
                   JOIN GAP ON NO_GAP.PRICE_SOURCE = GAP.PRICE_SOURCE
-                          --AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM  --still want to join on item, because I only want to count customers buying the items on the contract
+                          --AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM  --I THOUGHT I SHOULD join on item, because I only want to count customers buying the items on the contract, BUT NOW I THINK IT WORKS WITHOUT ITEM
                           AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT
-                GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT)
-                  --END REGION                        
+                GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT)--END REGION
+--END REGION      
+
 --REGION FINAL TABLE 
-SELECT E.*
+SELECT distinct
+       E.*
       ,G.PRCNT_CNCTD
+      ,pcca_vc_flg.PCCA_CNCTD
 FROM E
 LEFT JOIN GAP_PRCNT G ON E.PRICE_SOURCE = G.PRICE_SOURCE
                     -- AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
-                     AND E.VAR_CST_CONT = G.VAR_CST_CONT)
---END REGION
+                     AND E.VAR_CST_CONT = G.VAR_CST_CONT
+left join pcca_vc_flg on pcca_vc_flg.PRICE_SOURCE_PCCA = E.PRICE_SOURCE_PCCA
+                     and pcca_vc_flg.VAR_CST_CONT      = E.VAR_CST_CONT
+                     AND pcca_vc_flg.VAR_CST_CONT      = G.VAR_CST_CONT)--END REGION
 ;--END REGION
---END REGION
+
 
 --region ATTRIBUTE FLGS
 CREATE TABLE PAL_ATTRBT_FLGS AS
@@ -578,7 +604,7 @@ AND CC.ACTV_FLG = 'Y'
 ));--END REGION
 
       
---region jOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
+--region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
 DROP TABLE PAL_RPA; COMMIT;
 create table PAL_RPA as
 
@@ -586,7 +612,7 @@ create table PAL_RPA as
   INSERT INTO PAL_RPA */
 
 --I GROUPED THE FIELDS TO REVEAL REDUNDANCY. I HOPE TO LOSE SOME OF THESE.
-SELECT  --REGION
+SELECT  distinct --REGION 
         -----------ACCT INFO-----------------
         M.ACCT_ITEM_KEY,         M.SYS_PLTFRM, 
         M.BUS_PLTFRM,            M.HIGHEST_CUST_NAME, 
@@ -594,6 +620,7 @@ SELECT  --REGION
         M.SHIP_TO,               M.ST_NAME, 
         IPC.BID_OR_PRCA,         IPC.BID_OR_PRCA_NAME,
         IPC.LPG_ID,              IPC.LPG_DESC,
+        IPC.PRICE_SOURCE_PCCA,
         -----------ITEM----------- 
         M.ITEM_AS400_NUM,        M.ITEM_E1_NUM, 
         M.BL_QTY,                M.CURR_QTY,              
@@ -618,11 +645,12 @@ SELECT  --REGION
         M.BL_PRICING_COST,       CASE WHEN M.CURR_PRICING_COST is null THEN M.BL_TRIG_PRICING_COST ELSE  M.CURR_PRICING_COST  END AS CURR_PRICING_COST, 
         M.BL_COST_CHANGE,        M.CURR_COST_CHANGE, 
         -----------VAR COST-----------
-        M.BL_VAR_COST,           M.BL_TRIG_VAR_COST, 
+        M.CURR_VAR_COST,          
         M.CURR_MIN_VAR_CST,      IPC.MN_LPG_PRCA_COST,
         IPC.VAR_CST_CONT,        IPC.VAR_CST_CONT_NAME,
         IPC.VAR_CST_CONT_TYPE,   IPC.PRCNT_CNCTD,
-        --CASE WHEN VAR_CST_CONT = 
+ --       CASE WHEN TO_NUMBER(SUBSTR(IPC.VAR_CST_CONT,0,(INSTR (IPC.VAR_CST_CONT, '-', -1)) - 1)) = (CASE WHEN M.CURR_MCK_CONT is null THEN M.BL_TRIG_MCK_CONT  ELSE M.CURR_MCK_CONT END) THEN 'Y' else 'N' end as ST_CNCTD,
+        IPC.PCCA_CNCTD,
         -----------PRICE-----------
         M.BL_SELL_PRICE,         CASE WHEN M.CURR_SELL_PRICE    is null THEN M.BL_TRIG_SELL_PRICE   ELSE M.CURR_SELL_PRICE    END AS  CURR_SELL_PRICE,        
         M.BL_PRC_RULE,           CASE WHEN M.CURR_PRC_RULE      is null THEN M.BL_TRIG_PRC_RULE     ELSE M.CURR_PRC_RULE      END AS  CURR_PRC_RULE,              
