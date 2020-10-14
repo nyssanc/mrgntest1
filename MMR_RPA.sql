@@ -276,7 +276,8 @@ UNION
 SELECT * FROM PAL_RPA_4B;--end region
 
 --REGION 6 MY IPC
-CREATE TABLE PAL_RPA_IPC AS 
+drop table PAL_RPA_IPC_test;
+CREATE TABLE PAL_RPA_IPC_test AS 
 --REGION 6A START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
 SELECT * FROM (with A AS (select RPA.*, 
                                 to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||RPA.CASE_PREFIX||RPA.CASE_CNTR   as MMR_CASE,
@@ -323,15 +324,15 @@ SELECT * FROM (with A AS (select RPA.*,
                                  A.MMR_CASE,
                                  A.INSRT_DT,
                                  A.PRC_SRC_ITEM_KEY_1,
-                                 B.*,
-                                 TO_NUMBER(SUBSTR(B.COMP_COST_LIST_ID,0,(INSTR (B.COMP_COST_LIST_ID, '-', -1)) - 1)) as MCK_CNTRCT_ID
+                                 B.*
+                                
                           FROM       A
                               JOIN   B  on A.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY),
 --END REGION
 
 --REGION 6D MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE
                    D AS (SELECT * FROM (SELECT   sub1.PRC_SRC_ITEM_KEY_3,
-                                                 sub2.Mn_LPG_PRCA_Cost, 
+                                                 sub2.Mn_LPG_PRCA_Cost,
                                                  sub1.VAR_CST_CONT, 
                                                  sub1.VAR_CST_CONT_NAME, 
                                                  sub1.VAR_CST_CONT_TYPE, 
@@ -362,23 +363,15 @@ SELECT * FROM (with A AS (select RPA.*,
                                                              AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
                                         )WHERE RNK = 1
                         ),--end region
-      --region CONTRACT ORIGIN SRC
-/*X AS (
-SELECT c.COMP_COST_LIST_ID,
-             O.CHY55OSRC   as ORGN_SRC
-      FROM      C
-          JOIN  MMSDM910.SRC_E1_MMS_F5521010 O ON    O.CHY55CONID = C.MCK_CNTRCT_ID
-      WHERE MMSDM.CONVERT_JDE_DATEN(O.CHY55VEFFT) > SYSDATE
-      )*/
---END REGION   
+   
 
 --REGION 6E COMBINE THE CASE, IPC, VAR COST AND ORIGIN SOURCE DATA.
   E AS       (SELECT C.*,
-                     D.*
-                     --,E.ORGN_SRC
+                     D.*,
+                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1))    ELSE -1 END AS Var_MCK_CONT_ID,
+                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))               ELSE -1 END AS Var_MCK_CONT_TIER                                  
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY_3   --var cost info
-                  --left join E ON E.COMP_COST_LIST_ID = C.COMP_COST_LIST_ID   --orign source
                   ),--END REGION
                   
 --region 6F PCCA_VC_FLAG
@@ -518,22 +511,25 @@ WHERE SYS_PLTFRM = 'EC');--end region
 
 --region 8 ATTRIBUTE FLGS
 
+SELECT * FROM MMR_STATUS_FINAL
+;
+
 CREATE TABLE PAL_ATTRBT_FLGS AS
 SELECT * FROM(
-WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID, 
-                      M.BL_TRIG_CNTRCT_TIER_ID, 
-                      M.CURR_CNTRCT_TIER_ID,
+WITH All_ AS  (SELECT M.CURR_CNTRCT_TIER_ID,
+                      i.
                       M.ACCT_ITEM_KEY
                FROM      MMR_STATUS_FINAL M 
-                    join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY),
+                    join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY
+                    left join pal_rpa_ipc i on M.ACCT_ITEM_KEY = i.ACCT_ITEM_KEY),
      CURR  AS (SELECT  CURR_CNTRCT_TIER_ID,
-                       --ct.CNTRCT_SRC_CD AS CURR_ORGN_SCR,
+                       ct.CNTRCT_SRC_CD AS CURR_ORGN_SCR,
                        TIER_ATTRBT_ELGBLTY_FLG,
                        TIER_BASE_FLG,
                        ACCT_ITEM_KEY
                FROM      ALL_3 a
                 join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.CURR_CNTRCT_TIER_ID),
-     BSLN  AS (SELECT  BL_CNTRCT_TIER_ID,
+     VAR  AS (SELECT  BL_CNTRCT_TIER_ID,
                        TIER_ATTRBT_ELGBLTY_FLG,
                        TIER_BASE_FLG,
                        ACCT_ITEM_KEY
@@ -553,7 +549,7 @@ SELECT DISTINCT
        CURR.TIER_BASE_FLG            AS CURR_CONT_TIER_BASE_FLG,
        BSLN.TIER_BASE_FLG            AS BL_CONT_TIER_BASE_FLG,
        TRIG.TIER_BASE_FLG            AS TRIG_CONT_TIER_BASE_FLG,
-       --CURR.CURR_ORGN_SCR,
+       CURR.CURR_ORGN_SCR,
        ALL_3.ACCT_ITEM_KEY  
 FROM   ALL_3
     LEFT JOIN BSLN ON ALL_3.ACCT_ITEM_KEY = BSLN.ACCT_ITEM_KEY and ALL_3.BL_CNTRCT_TIER_ID      = BSLN.BL_CNTRCT_TIER_ID
@@ -706,9 +702,7 @@ SELECT  distinct --REGION
         CASE WHEN M.CURR_MFG_CONT       is null THEN M.BL_TRIG_MFG_CONT       ELSE M.CURR_MFG_CONT       END AS  CURR_MFG_CONT,
         CASE WHEN M.CURR_MFG_CONT_NAME  is null THEN M.BL_TRIG_MFG_CONT_NAME  ELSE M.CURR_MFG_CONT_NAME  END AS  CURR_MFG_CONT_NAME,
         CASE WHEN M.CURR_CONT_TYPE      is null THEN M.BL_TRIG_CONT_TYPE      ELSE M.CURR_CONT_TYPE      END AS  CURR_CONT_TYPE,
-        BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
-        TRIG_CONT_ATR_ELIG_FLG,      TRIG_CONT_TIER_BASE_FLG,
-        CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
+
         M.BL_ITEM_END_DT,        M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
        -- CURR_ORGN_SCR,
         -----------GPO-----------
