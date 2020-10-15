@@ -1,3 +1,4 @@
+
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
 Create table PAL_RPA_1 as 
 (Select M.ACCT_ITEM_KEY, 
@@ -276,8 +277,7 @@ UNION
 SELECT * FROM PAL_RPA_4B;--end region
 
 --REGION 6 MY IPC
-drop table PAL_RPA_IPC_test;
-CREATE TABLE PAL_RPA_IPC_test AS 
+CREATE TABLE PAL_RPA_IPC AS 
 --REGION 6A START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
 SELECT * FROM (with A AS (select RPA.*, 
                                 to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||RPA.CASE_PREFIX||RPA.CASE_CNTR   as MMR_CASE,
@@ -324,8 +324,7 @@ SELECT * FROM (with A AS (select RPA.*,
                                  A.MMR_CASE,
                                  A.INSRT_DT,
                                  A.PRC_SRC_ITEM_KEY_1,
-                                 B.*
-                                
+                                 B.*   
                           FROM       A
                               JOIN   B  on A.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY),
 --END REGION
@@ -367,9 +366,9 @@ SELECT * FROM (with A AS (select RPA.*,
 
 --REGION 6E COMBINE THE CASE, IPC, VAR COST AND ORIGIN SOURCE DATA.
   E AS       (SELECT C.*,
-                     D.*,
-                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1))    ELSE -1 END AS Var_MCK_CONT_ID,
-                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))               ELSE -1 END AS Var_MCK_CONT_TIER                                  
+                     D.*/*
+                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1),0))    ELSE -1 END AS Var_MCK_CONT_ID,
+                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))                      ELSE -1 END AS Var_MCK_CONT_TIER       */                           
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY_3   --var cost info
                   ),--END REGION
@@ -510,18 +509,14 @@ FROM MRGN_EU.MMR_DAILY_TXN
 WHERE SYS_PLTFRM = 'EC');--end region 
 
 --region 8 ATTRIBUTE FLGS
-
-SELECT * FROM MMR_STATUS_FINAL
-;
-
 CREATE TABLE PAL_ATTRBT_FLGS AS
 SELECT * FROM(
-WITH All_ AS  (SELECT M.CURR_CNTRCT_TIER_ID,
-                      i.
+WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID, 
+                      M.BL_TRIG_CNTRCT_TIER_ID, 
+                      M.CURR_CNTRCT_TIER_ID,
                       M.ACCT_ITEM_KEY
                FROM      MMR_STATUS_FINAL M 
-                    join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY
-                    left join pal_rpa_ipc i on M.ACCT_ITEM_KEY = i.ACCT_ITEM_KEY),
+                    join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY),
      CURR  AS (SELECT  CURR_CNTRCT_TIER_ID,
                        ct.CNTRCT_SRC_CD AS CURR_ORGN_SCR,
                        TIER_ATTRBT_ELGBLTY_FLG,
@@ -529,7 +524,7 @@ WITH All_ AS  (SELECT M.CURR_CNTRCT_TIER_ID,
                        ACCT_ITEM_KEY
                FROM      ALL_3 a
                 join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.CURR_CNTRCT_TIER_ID),
-     VAR  AS (SELECT  BL_CNTRCT_TIER_ID,
+     BSLN  AS (SELECT  BL_CNTRCT_TIER_ID,
                        TIER_ATTRBT_ELGBLTY_FLG,
                        TIER_BASE_FLG,
                        ACCT_ITEM_KEY
@@ -542,13 +537,11 @@ WITH All_ AS  (SELECT M.CURR_CNTRCT_TIER_ID,
                FROM      ALL_3 A
                   join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.BL_TRIG_CNTRCT_TIER_ID)
                     
-SELECT DISTINCT 
-       CURR.TIER_ATTRBT_ELGBLTY_FLG  AS CURR_CONT_ATR_ELIG_FLG,
+SELECT DISTINCT
        BSLN.TIER_ATTRBT_ELGBLTY_FLG  AS BL_CONT_ATR_ELIG_FLG,
-       TRIG.TIER_ATTRBT_ELGBLTY_FLG  AS TRIG_CONT_ATR_ELIG_FLG,
-       CURR.TIER_BASE_FLG            AS CURR_CONT_TIER_BASE_FLG,
        BSLN.TIER_BASE_FLG            AS BL_CONT_TIER_BASE_FLG,
-       TRIG.TIER_BASE_FLG            AS TRIG_CONT_TIER_BASE_FLG,
+       CASE WHEN CURR.TIER_ATTRBT_ELGBLTY_FLG is null THEN TRIG.TIER_ATTRBT_ELGBLTY_FLG ELSE CURR.TIER_ATTRBT_ELGBLTY_FLG END AS  CURR_CONT_ATR_ELIG_FLG,
+       CASE WHEN CURR.TIER_BASE_FLG is null THEN TRIG.TIER_BASE_FLG ELSE CURR.TIER_BASE_FLG END AS  CURR_CONT_TIER_BASE_FLG,
        CURR.CURR_ORGN_SCR,
        ALL_3.ACCT_ITEM_KEY  
 FROM   ALL_3
@@ -702,7 +695,8 @@ SELECT  distinct --REGION
         CASE WHEN M.CURR_MFG_CONT       is null THEN M.BL_TRIG_MFG_CONT       ELSE M.CURR_MFG_CONT       END AS  CURR_MFG_CONT,
         CASE WHEN M.CURR_MFG_CONT_NAME  is null THEN M.BL_TRIG_MFG_CONT_NAME  ELSE M.CURR_MFG_CONT_NAME  END AS  CURR_MFG_CONT_NAME,
         CASE WHEN M.CURR_CONT_TYPE      is null THEN M.BL_TRIG_CONT_TYPE      ELSE M.CURR_CONT_TYPE      END AS  CURR_CONT_TYPE,
-
+        BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
+        CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
         M.BL_ITEM_END_DT,        M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
        -- CURR_ORGN_SCR,
         -----------GPO-----------
@@ -748,8 +742,9 @@ left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
 --end region
                       
 --region DROP THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
-drop table PAL_RPA_2f;
+
 drop table PAL_RPA_2d;
+drop table PAL_RPA_2f;
 drop table PAL_RPA_2g;
 
 drop table PAL_RPA_POOL_E1;
