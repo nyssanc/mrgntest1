@@ -230,6 +230,7 @@ CREATE TABLE PAL_RPA_3C AS
         B.POOL_NUM 
  FROM PAL_RPA_3B B
  WHERE B.POOL_NUM IS NOT NULL);
+ --change here
  --END REGION
 
 --REGION 4A NM SIDE TOP 100 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
@@ -275,7 +276,7 @@ SELECT * FROM PAL_RPA_3C
 UNION
 SELECT * FROM PAL_RPA_4B;--end region
 
---REGION 6 MY IPC
+--REGION IPC
 CREATE TABLE PAL_RPA_IPC AS 
 --REGION 6A START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
 SELECT * FROM (with A AS (select RPA.*, 
@@ -287,7 +288,6 @@ SELECT * FROM (with A AS (select RPA.*,
                          from       MRGN_EU.PAL_RPA_CASES RPA  
                              JOIN   MRGN_EU.MMR_STATUS_FINAL M on RPA.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY),
 --END REGION                          
-
 --REGION 6B GET ALL THE IPC FIELDS YOU WILL NEED TO CALCULATE THE VAR COST INFORMATION AND TO PROVIDE TO THE FINAL RESULTS
                    B AS (SELECT ------FOR FINAL RESULTS---------
                                 BID_OR_PRCA,
@@ -296,7 +296,7 @@ SELECT * FROM (with A AS (select RPA.*,
                                 LPG_DESC,
                                 PRICE_SOURCE_PCCA,
                                 ------FOR THE VAR COST and orign source CALCULATIONs ONLY--------
-                                PRICE_SOURCE,                            SHIP_TO,
+                                PRICE_SOURCE,                            SHIP_TO,   
                                 ITEM_AS400_NUM,                          ITEM_E1_NUM,
                                 COMP_COST_INITIAL,                       PRICING_COST_INITIAL,
                                 --PRICING_COST_CONT_ID,                    COMP_COST_CONT_ID, --replacing this with mck contract
@@ -304,7 +304,7 @@ SELECT * FROM (with A AS (select RPA.*,
                                 COMP_COST_LIST_ID,
                                 PRICING_COST_CONT_NAME,                  COMP_COST_CONT_NAME,    
                                 PRICING_COST_CONT_TYPE,                  COMP_COST_CONT_TYPE, 
-                                SYS_PLTFRM,                              
+                                SYS_PLTFRM,                                                
                                 VAR_COST,
                                 PRICE_SOURCE || ',' ||
                                 (CASE WHEN SYS_PLTFRM = 'AS400' THEN ITEM_AS400_NUM ELSE TO_CHAR(ITEM_E1_NUM) END) as PRC_SRC_ITEM_KEY_2,
@@ -312,7 +312,6 @@ SELECT * FROM (with A AS (select RPA.*,
                                                             ELSE SYS_PLTFRM||ACCT_OR_BILL_TO||BUS_PLTFRM||ITEM_AS400_NUM END AS ACCT_ITEM_KEY --NEEDED TO JOIN TO THE CASE INFORMATION
                          FROM MRGN_EU.HAH_IPC),
 --END REGION
-
 --REGION 6C COMBINE THE CASE DATA WITH THE IPC DATA REDUCING IPC DATASET TO WHAT IS IN THE CASES
 /*              THIS WILL BENEFIT EACH OF THE FOLLOWING TABLE JOINS. 
   YOU MAY WANT THIS TO BE A LEFT JOIN IN THE FUTURE if you are losing case data */
@@ -327,43 +326,7 @@ SELECT * FROM (with A AS (select RPA.*,
                           FROM       A
                               JOIN   B  on A.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY),
 --END REGION
-
---REGION OLD VERSION
-/*6D MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE
-                   D AS (SELECT * FROM (SELECT   sub1.PRC_SRC_ITEM_KEY_3,
-                                                 sub2.Mn_LPG_PRCA_Cost,
-                                                 sub1.VAR_CST_CONT, 
-                                                 sub1.VAR_CST_CONT_NAME, 
-                                                 sub1.VAR_CST_CONT_TYPE, 
-                                                 RANK() OVER (PARTITION BY sub1.PRICE_SOURCE, sub1.ITEM ORDER BY sub1.VAR_CST_CONT, sub1.VAR_CST_CONT_TYPE, sub1.COMP_COST_LIST_ID) as RNK --I ADDED THE COMP COST LIST ID TO REMOVE DUPLICATION
-                                        FROM         (SELECT DISTINCT B.PRICE_SOURCE, B.COMP_COST_LIST_ID, B.PRC_SRC_ITEM_KEY_2 as PRC_SRC_ITEM_KEY_3,
-                                                                      CASE WHEN B.SYS_PLTFRM = 'AS400' THEN B.ITEM_AS400_NUM                            ELSE TO_CHAR(B.ITEM_E1_NUM)   END AS ITEM,
-                                                                      CASE WHEN B.SYS_PLTFRM = 'E1'    THEN LEAST(B.COMP_COST_INITIAL, B.PRICING_COST_INITIAL) ELSE B.COMP_COST_INITIAL END AS LPG_PRCA_Cost,
-                                                                      CASE WHEN B.SYS_PLTFRM = 'E1'    AND B.PRICING_COST_INITIAL < B.COMP_COST_INITIAL THEN B.PRICING_COST_CONT_ID   ELSE COMP_COST_CONT_ID      END AS VAR_CST_CONT,
-                                                                      CASE WHEN B.SYS_PLTFRM = 'E1'    
-                                                                            AND B.PRICING_COST_INITIAL < B.COMP_COST_INITIAL THEN B.PRICING_COST_CONT_NAME ELSE B.COMP_COST_CONT_NAME    END AS VAR_CST_CONT_NAME,
-                                                                      CASE WHEN B.SYS_PLTFRM = 'E1'    
-                                                                            AND B.PRICING_COST_INITIAL < B.COMP_COST_INITIAL THEN B.PRICING_COST_CONT_TYPE ELSE B.COMP_COST_CONT_TYPE    END AS VAR_CST_CONT_TYPE     
-                                                       FROM  B --I NEED ALL THE OPTIONS FOR THE IPC, NOT JUST THE COSTS ON THE MMR. 
-                                                        JOIN A ON A.PRC_SRC_ITEM_KEY_1 = B.PRC_SRC_ITEM_KEY_2 
-                                                       WHERE VAR_COST = 'Y'
-                                                       )sub1
-                                        INNER JOIN    (SELECT DISTINCT B.PRICE_SOURCE, 
-                                                                       CASE WHEN B.SYS_PLTFRM = 'AS400' THEN B.ITEM_AS400_NUM  ELSE TO_CHAR(B.ITEM_E1_NUM) 
-                                                                       END AS ITEM,
-                                                                       CASE WHEN B.SYS_PLTFRM = 'AS400' THEN MIN(B.COMP_COST_INITIAL) OVER (PARTITION BY B.PRICE_SOURCE, B.ITEM_AS400_NUM)  
-                                                                            WHEN B.SYS_PLTFRM = 'E1'    THEN MIN(LEAST(B.COMP_COST_INITIAL, B.PRICING_COST_INITIAL)) OVER (PARTITION BY B.PRICE_SOURCE, B.ITEM_E1_NUM) 
-                                                                       END AS Mn_LPG_PRCA_Cost
-                                                       FROM B --I NEED ALL THE OPTIONS FOR THE IPC, NOT JUST THE COSTS ON THE MMR. 
-                                                        JOIN A ON A.PRC_SRC_ITEM_KEY_1 = B.PRC_SRC_ITEM_KEY_2  
-                                                       WHERE VAR_COST = 'Y'
-                                                       )sub2 ON sub1.PRICE_SOURCE = sub2.PRICE_SOURCE 
-                                                             AND sub1.ITEM = sub2.ITEM
-                                                             AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
-                                        )WHERE RNK = 1
-                        ),*/--end region
---REGION NEW VERSION
---6D MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE
+--REGION 6D MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE
                    D AS (SELECT * FROM (SELECT   sub1.PRC_SRC_ITEM_KEY_3,
                                                  sub2.Mn_LPG_PRCA_Cost,
                                                  sub1.VAR_CST_CONT, 
@@ -396,17 +359,15 @@ SELECT * FROM (with A AS (select RPA.*,
                                                              AND sub1.ITEM = sub2.ITEM
                                                              AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
                                         )WHERE RNK = 1
-                        ),--end region
-   
+                        ),--end region  
 --REGION 6E COMBINE THE CASE, IPC, VAR COST AND ORIGIN SOURCE DATA.
   E AS       (SELECT C.*,
-                     D.*/*
+                     D.*,
                      CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1),0))    ELSE -1 END AS Var_MCK_CONT_ID,
-                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))                      ELSE -1 END AS Var_MCK_CONT_TIER       */                           
+                     CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))                      ELSE -1 END AS Var_MCK_CONT_TIER                                  
               FROM  C
                   left JOIN D ON C.PRC_SRC_ITEM_KEY_1 = D.PRC_SRC_ITEM_KEY_3   --var cost info
-                  ),--END REGION
-                  
+                  ),--END REGION                 
 --region 6F PCCA_VC_FLAG
 /*NOTES
 FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO CONNECTED TO THE VAR_COST_CONT*/
@@ -419,8 +380,8 @@ FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO 
                   FROM E 
                   where PRICE_SOURCE_PCCA = ship_to 
                     and VAR_COST = 'Y'),--END REGION
-
 --region 6G %ST'S ON VAR_COST_CONT
+--region STEP 1
 /* STEP 1 NOTES
   IN THE FIRST STEP I GATHER VAR COST LINES FROM MY CASE DATA BY ACCT, ITEM, VAR_COST_CONT, AND PRC_SRC WHICH COULD BE BID, PRCA, OR LPG.
   I NEED TO JOIN OUT TO ALL THE IPC DATA TO GET A BETTER COUNT OF ACCT'S ON AND OFF THE CONTRACT
@@ -437,7 +398,8 @@ FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO 
             JOIN B ON E.PRICE_SOURCE = B.PRICE_SOURCE
                   AND E.ITEM_E1_NUM = B.ITEM_E1_NUM
           WHERE B.VAR_COST ='Y'
-                and B.sys_pltfrm = 'E1'),
+            and B.sys_pltfrm = 'E1'
+            and E.VAR_CST_CONT is not null),-- END REGION
 -- REGION STEPS 2 AND 3 
 /*NOTES 
   I SEPERATE MY DATA BY THE GAP FLAG AND COUNT THE ACCT'S BY ITEM AND PRICE SOURCE TO BE DIVIDED LATER
@@ -461,11 +423,7 @@ FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO 
 /* NOTES
    WHERE THE ITEM, VAR_COST_CONT AND PRICE SOURCE MATCHES I CAN CALCULATE THE PERCENTAGE OF CONNECTED ACCT'S
    OVER THE TOTAL COUNT OF ACCT'S BUYING THAT ITEM CONNECTED OR NOT*/
-GAP_PRCNT AS   (SELECT ROUND(
-                       sum(NO_GAP.CNT) /
-                       (sum(GAP.CNT)   +
-                       sum(NO_GAP.CNT)
-                             ),2)    AS PRCNT_CNCTD
+GAP_PRCNT AS   (SELECT ROUND(sum(NO_GAP.CNT) / (sum(GAP.CNT)  + sum(NO_GAP.CNT)),2)    AS PRCNT_CNCTD
                       ,NO_GAP.PRICE_SOURCE
                       ,NO_GAP.VAR_CST_CONT
                       --removed item to get the sum of all customers buying any item on the contract on any other contract,NO_GAP.ITEM_E1_NUM
@@ -473,28 +431,69 @@ GAP_PRCNT AS   (SELECT ROUND(
                   JOIN GAP ON NO_GAP.PRICE_SOURCE = GAP.PRICE_SOURCE
                           --AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM  --I THOUGHT I SHOULD join on item, because I only want to count customers buying the items on the contract, BUT NOW I THINK IT WORKS WITHOUT ITEM
                           AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT
-                GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT)--END REGION
+                GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT),
+                --END REGION
+                
 --END REGION      
+--region 6H COMBINE ALL PREVIOUS TABLES and select fields
+H AS (SELECT  E.SHIP_TO,  E.SYS_PLTFRM,
+              E.PRICE_SOURCE_PCCA ,E.BID_OR_PRCA ,E.BID_OR_PRCA_NAME
+              ,G.PRCNT_CNCTD      ,pcca_vc_flg.PCCA_CNCTD
+              ,E.MN_LPG_PRCA_COST
+              ,E.LPG_ID,            E.LPG_DESC,
+              E.VAR_CST_CONT,       E.VAR_CST_CONT_NAME, E.VAR_CST_CONT_TYPE,  
+              E.TEAM_ASSIGNED,      E.POOL_NUM,
+              E.MMR_CASE,           E.INSRT_DT,
+              E.CASE_CNTR,          E.ACCT_ITEM_KEY,
+              E.Var_MCK_CONT_ID,    E.Var_MCK_CONT_TIER
+        FROM E
+        LEFT JOIN GAP_PRCNT G ON E.PRICE_SOURCE = G.PRICE_SOURCE
+                            -- AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
+                             AND E.VAR_CST_CONT = G.VAR_CST_CONT
+        left join pcca_vc_flg on pcca_vc_flg.PRICE_SOURCE_PCCA = E.PRICE_SOURCE_PCCA
+                             and pcca_vc_flg.VAR_CST_CONT      = E.VAR_CST_CONT
+                             AND pcca_vc_flg.VAR_CST_CONT      = G.VAR_CST_CONT)--END REGION  
+--REGION final table ADD CONTRACT TIER ID AND CUSTOMER ID
+SELECT DISTINCT
+       H.*,
+       CT.DIM_CNTRCT_TIER_ID as VrCst_CNTRCT_TIER_ID,
+       C.DIM_CUST_CURR_ID
+      FROM  H
+      LEFT JOIN EDWRPT.V_DIM_CNTRCT_TIER CT ON CT.CNTRCT_NUM = H.Var_MCK_CONT_ID
+                                           AND CT.TIER_NUM   = H.Var_MCK_CONT_TIER
+      LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_E1_NUM);                                           --END REGION       
+--END REGION                                          
 
---REGION FINAL TABLE 
-SELECT distinct
-      E.PRICE_SOURCE_PCCA ,E.BID_OR_PRCA ,E.BID_OR_PRCA_NAME
-      ,G.PRCNT_CNCTD      ,pcca_vc_flg.PCCA_CNCTD
-      ,E.MN_LPG_PRCA_COST
-      ,E.LPG_ID,            E.LPG_DESC,
-      E.VAR_CST_CONT,       E.VAR_CST_CONT_NAME, E.VAR_CST_CONT_TYPE,  
-      E.TEAM_ASSIGNED,      E.POOL_NUM,
-      E.MMR_CASE,           E.INSRT_DT,
-      E.CASE_CNTR,          E.ACCT_ITEM_KEY 
-FROM E
-LEFT JOIN GAP_PRCNT G ON E.PRICE_SOURCE = G.PRICE_SOURCE
-                    -- AND E.ITEM_E1_NUM = G.ITEM_E1_NUM
-                     AND E.VAR_CST_CONT = G.VAR_CST_CONT
-left join pcca_vc_flg on pcca_vc_flg.PRICE_SOURCE_PCCA = E.PRICE_SOURCE_PCCA
-                     and pcca_vc_flg.VAR_CST_CONT      = E.VAR_CST_CONT
-                     AND pcca_vc_flg.VAR_CST_CONT      = G.VAR_CST_CONT)--END REGION
-;--END REGION
-
+--REGION INDEX AND DISTINCT IPC
+CREATE INDEX MRGN_EU.PAL_RPA_IPC_IND ON MRGN_EU.PAL_RPA_IPC
+(VrCst_CNTRCT_TIER_ID, DIM_CUST_CURR_ID, ACCT_ITEM_KEY)
+LOGGING
+NOPARALLEL;--END REGION
+                                    
+--REGION ADD VAR COST CONTRACT EXCLUDED FLAG (added 10 mins to the process)
+create table PAL_RPA_EXCL_FLG AS 
+SELECT * FROM(WITH D_IPC     AS (SELECT DISTINCT VrCst_CNTRCT_TIER_ID, DIM_CUST_CURR_ID FROM PAL_RPA_IPC),
+                   EXCLD_FLG AS (SELECT  --DISTINCT THERE SHOULD BE A 1 TO 1 RELATIONSHIP THAT MEANS i DON'T NEED THIS
+                                         I.DIM_CUST_CURR_ID,
+                                         I.VrCst_CNTRCT_TIER_ID,
+                                         --cce.CUST_INCL_EXCL_CD,
+                                         'Y'  VrCst_CONT_EXCLD
+                                  FROM   D_IPC I
+                                    JOIN EDWRPT.V_DIM_CUST_CURR c              ON I.DIM_CUST_CURR_ID = c.DIM_CUST_CURR_ID
+                                    JOIN EDWRPT.V_FACT_CAMS_CNTRCT_ELGBLTY cce ON I.VrCst_CNTRCT_TIER_ID = cce.DIM_CNTRCT_TIER_ID
+                                                                              AND c.DIM_CUST_CURR_ID = cce.DIM_CUST_CURR_ID
+                                  WHERE  c.CUST_TYPE_CD         IN ('S', 'X', 'B') -- I ADDED B TO INCLUDE BILL-TO ADDRESS ONLY, SHOULD I??
+                                     AND c.SYS_PLTFRM           =  'E1'
+                                     AND c.ACTV_FLG             =  'Y'    
+                                     and cce.ELGBLTY_END_DT     >  sysdate
+                                     and cce.ELGBLTY_START_DT   <  sysdate
+                                     and cce.CUST_INCL_EXCL_CD  =  'E')                          
+              SELECT DISTINCT I.*,
+                     coalesce(E.VrCst_CONT_EXCLD, 'N') as VrCst_CONT_EXCLD
+              FROM   D_IPC I
+              LEFT JOIN EXCLD_FLG E ON E.DIM_CUST_CURR_ID = I.DIM_CUST_CURR_ID
+                                   AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);--end region 
+                                   
 --region 7 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis--
 CREATE TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN AS
 select * from(
@@ -591,6 +590,7 @@ FROM   ALL_3
     LEFT JOIN CURR ON ALL_3.ACCT_ITEM_KEY = CURR.ACCT_ITEM_KEY AND ALL_3.CURR_CNTRCT_TIER_ID    = CURR.CURR_CNTRCT_TIER_ID
     LEFT JOIN VRCST ON ALL_3.ACCT_ITEM_KEY = VRCST.ACCT_ITEM_KEY AND ALL_3.VRCST_CNTRCT_TIER_ID = VRCST.VRCST_CNTRCT_TIER_ID
     );--END REGION
+    
 --REGION 9 GPO, HIN, DEA, RX INFO
 
 CREATE TABLE PAL_RPA_GPO_DEA_HIN AS ( SELECT * FROM (
@@ -718,7 +718,7 @@ SELECT  distinct --REGION
         IPC.VAR_CST_CONT,        IPC.VAR_CST_CONT_NAME,
         IPC.VAR_CST_CONT_TYPE,   IPC.PRCNT_CNCTD,
  --       CASE WHEN TO_NUMBER(SUBSTR(IPC.VAR_CST_CONT,0,(INSTR (IPC.VAR_CST_CONT, '-', -1)) - 1)) = (CASE WHEN M.CURR_MCK_CONT is null THEN M.BL_TRIG_MCK_CONT  ELSE M.CURR_MCK_CONT END) THEN 'Y' else 'N' end as ST_CNCTD,
-        IPC.PCCA_CNCTD,
+        IPC.PCCA_CNCTD,          --for test IPC.VrCst_CONT_EXCLD,
         -----------PRICE-----------
         M.BL_SELL_PRICE,         CASE WHEN M.CURR_SELL_PRICE    is null THEN M.BL_TRIG_SELL_PRICE   ELSE M.CURR_SELL_PRICE    END AS  CURR_SELL_PRICE,        
         M.BL_PRC_RULE,           CASE WHEN M.CURR_PRC_RULE      is null THEN M.BL_TRIG_PRC_RULE     ELSE M.CURR_PRC_RULE      END AS  CURR_PRC_RULE,              
