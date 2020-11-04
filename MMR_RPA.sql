@@ -1,3 +1,4 @@
+
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
 Create table PAL_RPA_1 as 
 (Select M.ACCT_ITEM_KEY, 
@@ -60,107 +61,91 @@ Create table PAL_RPA_1 as
                     )   */      
 );--end region 
 
+--region cct cases
+CREATE TABLE PAL_RPA_2g AS
+select * from (
 --region 2a All Cost Inc Lines
-Create Table PAL_RPA_2a as 
-(SELECT ACCT_ITEM_KEY, 
-        BUS_PLTFRM,
-        BL_MFG_CONT, 
-        ITEM_E1_NUM, 
-        MMR_TYPE,
-        COST_IMPACT,
-        PNDG_MMR_OPP
- from PAL_RPA_1
- where MMR_TYPE in ('CCI','CCI/LM') -- may need to add more fields
-       and COST_IMPACT > 0
-       AND SYS_PLTFRM = 'E1' --removeD AS400 so that it can be passed on to STRAT
-       and BL_MFG_CONT_CHANGE <> 'SAME CONRACT'
- );--end region
-
+with PAL_RPA_2a as (SELECT ACCT_ITEM_KEY, 
+                          BUS_PLTFRM,
+                          BL_MFG_CONT, 
+                          ITEM_E1_NUM, 
+                          MMR_TYPE,
+                          COST_IMPACT,
+                          PNDG_MMR_OPP
+                   from PAL_RPA_1
+                   where MMR_TYPE in ('CCI','CCI/LM') -- may need to add more fields
+                         and COST_IMPACT > 0
+                         AND SYS_PLTFRM = 'E1' --removeD AS400 so that it can be passed on to STRAT
+                         and BL_MFG_CONT_CHANGE <> 'SAME CONRACT'),--end region
 --region 2B EntCont Issues
-Create Table PAL_RPA_2b as 
-(SELECT SUM(COST_IMPACT) AS SUM_OPP,  
-        BL_MFG_CONT, 
-        BUS_PLTFRM  --grouping by bus pltform was creating duplicate values so I need to join on it
- from PAL_RPA_2a
- WHERE MMR_TYPE in ('CCI','CCI/LM')
- GROUP BY BL_MFG_CONT, BUS_PLTFRM
- HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 50000
-                                 WHEN BUS_PLTFRM = 'EC' THEN 20000 end)
-); --end region
-
+PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,  
+                      BL_MFG_CONT, 
+                      BUS_PLTFRM  --grouping by bus pltform was creating duplicate values so I need to join on it
+               from PAL_RPA_2a
+               WHERE MMR_TYPE in ('CCI','CCI/LM')
+               GROUP BY BL_MFG_CONT, BUS_PLTFRM
+               HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 50000
+                                 WHEN BUS_PLTFRM = 'EC' THEN 20000 end)), --end region
 --region 2C: TOP 70 EntContByOpp$
-Create Table PAL_RPA_2c as 
-(SELECT SUM_OPP, 
-        BL_MFG_CONT,
-        BUS_PLTFRM, --grouping by bus pltform was creating duplicate values so I need to join on it
-        ROWNUM AS CASE_CNTR
- FROM (SELECT SUM_OPP, 
-              BL_MFG_CONT
-              ,BUS_PLTFRM--grouping by bus pltform was creating duplicate values so I need to join on it
-       from PAL_RPA_2b
-       ORDER BY SUM_OPP DESC
-       FETCH FIRST 70 ROWS ONLY)); --end region
-
+PAL_RPA_2c as (SELECT SUM_OPP, 
+                      BL_MFG_CONT,
+                      BUS_PLTFRM, --grouping by bus pltform was creating duplicate values so I need to join on it
+                      ROWNUM AS CASE_CNTR
+               FROM (SELECT SUM_OPP, 
+                            BL_MFG_CONT
+                            ,BUS_PLTFRM--grouping by bus pltform was creating duplicate values so I need to join on it
+                     from PAL_RPA_2b
+                     ORDER BY SUM_OPP DESC
+                     FETCH FIRST 70 ROWS ONLY)), --end region
 --region 2D Top 70 Enterprise Cont Issues By Opp$, one of the tables to union
-create table PAL_RPA_2d as 
-(Select A.ACCT_ITEM_KEY, 
-       '1' as case_prefix,
-       CASE_CNTR,
-       'CCT' as Team_Assigned 
-from PAL_RPA_2c C
-join PAL_RPA_2a A on a.BL_MFG_CONT = C.BL_MFG_CONT
-                 and a.BUS_PLTFRM = c.BUS_PLTFRM); --end region
-
+PAL_RPA_2d as (Select A.ACCT_ITEM_KEY, 
+                     '1' as case_prefix,
+                     CASE_CNTR,
+                     'CCT' as Team_Assigned 
+              from PAL_RPA_2c C
+              join PAL_RPA_2a A on a.BL_MFG_CONT = C.BL_MFG_CONT
+                               and a.BUS_PLTFRM = c.BUS_PLTFRM), --end region
 --region 2E Seperate the already assinged lines from the original data set and add new lower limits
-create table PAL_RPA_2e as 
-(SELECT A.ACCT_ITEM_KEY, 
-        A.BUS_PLTFRM,
-        A.BL_MFG_CONT, 
-        A.ITEM_E1_NUM, 
-        A.COST_IMPACT
-FROM PAL_RPA_2a A
-join (Select BL_MFG_CONT from PAL_RPA_2a
-             MINUS 
-      Select BL_MFG_CONT from PAL_RPA_2b) x on A.BL_MFG_CONT = x.BL_MFG_CONT
-   ); --end region
-  
+PAL_RPA_2e as (SELECT A.ACCT_ITEM_KEY, 
+                      A.BUS_PLTFRM,
+                      A.BL_MFG_CONT, 
+                      A.ITEM_E1_NUM, 
+                      A.COST_IMPACT
+              FROM PAL_RPA_2a A
+              join (Select BL_MFG_CONT from PAL_RPA_2a
+                           MINUS 
+                    Select BL_MFG_CONT from PAL_RPA_2b) x on A.BL_MFG_CONT = x.BL_MFG_CONT), --end region
 --region 2F_1 Item Increase Issues
-Create Table PAL_RPA_2f_1 as 
 --THE F TABLESWERE SPLIT UP BECAUSE SO MUCH HAD ALREADY HAPPENED BELOW
-(SELECT SUM(COST_IMPACT) AS SUM_OPP,  
-        ITEM_E1_NUM
- from PAL_RPA_2e
- GROUP BY ITEM_E1_NUM, BUS_PLTFRM
- HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 20000
-                                 WHEN BUS_PLTFRM = 'EC' THEN 10000 end)
-); --end region
-
+PAL_RPA_2f_1 as (SELECT SUM(COST_IMPACT) AS SUM_OPP,  
+                        ITEM_E1_NUM
+                 from PAL_RPA_2e
+                 GROUP BY ITEM_E1_NUM, BUS_PLTFRM
+                 HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 20000
+                                                 WHEN BUS_PLTFRM = 'EC' THEN 10000 end)
+                ), --end region
 --region 2F_2 TOP 30 Item increases by sumOpp$
-Create Table PAL_RPA_2f_2 as 
-(SELECT SUM_OPP, 
-        ITEM_E1_NUM,
-        ROWNUM+70 AS CASE_CNTR  --I WANT CASES 71-100 TO BE ITEM SO THAT'S WHERE ROW NUM WILL START.
- FROM (SELECT SUM_OPP, 
-              ITEM_E1_NUM
-       from PAL_RPA_2f_1
-       ORDER BY SUM_OPP DESC
-       FETCH FIRST 30 ROWS ONLY)); --end region
-
+PAL_RPA_2f_2 as (SELECT SUM_OPP, 
+                        ITEM_E1_NUM,
+                        ROWNUM+70 AS CASE_CNTR  --I WANT CASES 71-100 TO BE ITEM SO THAT'S WHERE ROW NUM WILL START.
+                 FROM (SELECT SUM_OPP, 
+                              ITEM_E1_NUM
+                       from PAL_RPA_2f_1
+                       ORDER BY SUM_OPP DESC
+                       FETCH FIRST 30 ROWS ONLY)), --end region
 --region 2F  Top 30 Item increase issue cases, one of the tables to union
-create table PAL_RPA_2f as 
-(Select E.ACCT_ITEM_KEY, 
-       '2' as case_prefix,
-       CASE_CNTR,
-       'CCT' as Team_Assigned 
-from PAL_RPA_2e  E
-join PAL_RPA_2f_2 F on F.ITEM_E1_NUM = E.ITEM_E1_NUM); --end region
-
+PAL_RPA_2f as (Select E.ACCT_ITEM_KEY, 
+                     '2' as case_prefix,
+                     CASE_CNTR,
+                     'CCT' as Team_Assigned 
+              from PAL_RPA_2e  E
+              join PAL_RPA_2f_2 F on F.ITEM_E1_NUM = E.ITEM_E1_NUM) --end region
 --region 2G UNION all cct cases
-CREATE TABLE PAL_RPA_2g AS 
-(SELECT * FROM PAL_RPA_2d
+SELECT * FROM PAL_RPA_2d
   UNION
  SELECT * FROM PAL_RPA_2f
 ); --end region
+--end region
 
 --region ADD POOL TO MAIN, need to filter to e1 data only
 create table PAL_RPA_POOL_E1 AS
@@ -190,12 +175,6 @@ from PAL_RPA_1 x
                                  AND X.SYS_PLTFRM = P.SYS_PLTFRM);--end region
  
 --region DROP THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
-drop table PAL_RPA_2a; 
-drop table PAL_RPA_2b; 
-drop table PAL_RPA_2c;
-drop table PAL_RPA_2f_1;
-drop table PAL_RPA_2f_2;
-drop table PAL_RPA_2e; 
 drop table PAL_RPA_1; COMMIT;--end region 
 
 --region 2h ADD POOL TO CCT CASES ONE OF THE CASE GROUPS
@@ -276,6 +255,15 @@ SELECT * FROM PAL_RPA_3C
 UNION
 SELECT * FROM PAL_RPA_4B;--end region
 
+--REGION DROP TABLES i DON'T NEED ANYMORE
+DROP TABLE PAL_RPA_2h;
+DROP TABLE PAL_RPA_2g;
+DROP TABLE PAL_RPA_3A;
+DROP TABLE PAL_RPA_3B;
+DROP TABLE PAL_RPA_3C;
+DROP TABLE PAL_RPA_4A;
+DROP TABLE PAL_RPA_4B;--END REGION 
+
 --REGION IPC
 CREATE TABLE PAL_RPA_IPC AS 
 --REGION 6A START WITH THE CASE INFORMATION CALCULATING THE CASE # AND A KEY TO JOIN ON VARIABLE COST INFORMATION
@@ -294,9 +282,9 @@ SELECT * FROM (with A AS (select RPA.*,
                                 BID_OR_PRCA_NAME,
                                 LOCAL_PRICING_GROUP_ID LPG_ID,
                                 LPG_DESC,
-                                PRICE_SOURCE_PCCA,
+                                PRICE_SOURCE_PCCA,  SHIP_TO, ACCT_OR_BILL_TO, BUS_PLTFRM,
                                 ------FOR THE VAR COST and orign source CALCULATIONs ONLY--------
-                                PRICE_SOURCE,                            SHIP_TO,   
+                                PRICE_SOURCE,                               
                                 ITEM_AS400_NUM,                          ITEM_E1_NUM,
                                 COMP_COST_INITIAL,                       PRICING_COST_INITIAL,
                                 --PRICING_COST_CONT_ID,                    COMP_COST_CONT_ID, --replacing this with mck contract
@@ -304,7 +292,7 @@ SELECT * FROM (with A AS (select RPA.*,
                                 COMP_COST_LIST_ID,
                                 PRICING_COST_CONT_NAME,                  COMP_COST_CONT_NAME,    
                                 PRICING_COST_CONT_TYPE,                  COMP_COST_CONT_TYPE, 
-                                SYS_PLTFRM,                                                
+                                SYS_PLTFRM,                                                               
                                 VAR_COST,
                                 PRICE_SOURCE || ',' ||
                                 (CASE WHEN SYS_PLTFRM = 'AS400' THEN ITEM_AS400_NUM ELSE TO_CHAR(ITEM_E1_NUM) END) as PRC_SRC_ITEM_KEY_2,
@@ -360,7 +348,7 @@ SELECT * FROM (with A AS (select RPA.*,
                                                              AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
                                         )WHERE RNK = 1
                         ),--end region  
---REGION 6E COMBINE THE CASE, IPC, VAR COST AND ORIGIN SOURCE DATA.
+--REGION 6E COMBINE THE CASE, IPC, and VAR COST DATA.
   E AS       (SELECT C.*,
                      D.*,
                      CASE WHEN C.SYS_PLTFRM = 'E1' THEN TO_NUMBER(NVL(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1),0))    ELSE -1 END AS Var_MCK_CONT_ID,
@@ -388,7 +376,7 @@ FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO 
   I FLAG EACH LINE BY WHETHER OR NOT IT IS COSTING ON THE LOWEST GROUP CONTRACT.
   THIS IS FOR E1 ONLY CURRENTLY
 */
-   F  as (SELECT distinct --ACCT_ITEM_KEY,-- I REMOVED THIS BECAUSE I'M WORKING OUT TO LINES THAT AREN'T IN MY MODEL
+   G  as (SELECT distinct --ACCT_ITEM_KEY,-- I REMOVED THIS BECAUSE I'M WORKING OUT TO LINES THAT AREN'T IN MY MODEL
                  B.SHIP_TO
                 ,B.ITEM_E1_NUM
                 ,E.VAR_CST_CONT
@@ -409,14 +397,14 @@ FOR EACH PCCA AND VAR_COST_CONT, WHERE THE SHIP_TO IS THE PCCA, IS THAT SHIP_TO 
                       ,ITEM_E1_NUM
                       ,VAR_CST_CONT
                       ,PRICE_SOURCE
-                FROM F
+                FROM G
                 WHERE GAP = 'N'
                 GROUP BY ITEM_E1_NUM, PRICE_SOURCE, VAR_CST_CONT),
      GAP as (SELECT COUNT(SHIP_TO) AS CNT
                    ,ITEM_E1_NUM
                    ,VAR_CST_CONT
                    ,PRICE_SOURCE
-             FROM F
+             FROM G
              WHERE GAP = 'Y'
              GROUP BY ITEM_E1_NUM, PRICE_SOURCE,VAR_CST_CONT), --END REGION
 --REGION STEP 4 GAP PERCENTAGE
@@ -432,11 +420,10 @@ GAP_PRCNT AS   (SELECT ROUND(sum(NO_GAP.CNT) / (sum(GAP.CNT)  + sum(NO_GAP.CNT))
                           --AND NO_GAP.ITEM_E1_NUM = GAP.ITEM_E1_NUM  --I THOUGHT I SHOULD join on item, because I only want to count customers buying the items on the contract, BUT NOW I THINK IT WORKS WITHOUT ITEM
                           AND NO_GAP.VAR_CST_CONT = GAP.VAR_CST_CONT
                 GROUP BY NO_GAP.PRICE_SOURCE, NO_GAP.VAR_CST_CONT),
-                --END REGION
-                
+                --END REGION               
 --END REGION      
 --region 6H COMBINE ALL PREVIOUS TABLES and select fields
-H AS (SELECT  E.SHIP_TO,  E.SYS_PLTFRM,
+H AS (SELECT  E.SHIP_TO,  E.SYS_PLTFRM, E.BUS_PLTFRM, E.ACCT_OR_BILL_TO,
               E.PRICE_SOURCE_PCCA ,E.BID_OR_PRCA ,E.BID_OR_PRCA_NAME
               ,G.PRCNT_CNCTD      ,pcca_vc_flg.PCCA_CNCTD
               ,E.MN_LPG_PRCA_COST
@@ -461,7 +448,7 @@ SELECT DISTINCT
       FROM  H
       LEFT JOIN EDWRPT.V_DIM_CNTRCT_TIER CT ON CT.CNTRCT_NUM = H.Var_MCK_CONT_ID
                                            AND CT.TIER_NUM   = H.Var_MCK_CONT_TIER
-      LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_E1_NUM);                                           --END REGION       
+      LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_NUM);                                           --END REGION       
 --END REGION                                          
 
 --REGION INDEX AND DISTINCT IPC
@@ -470,7 +457,7 @@ CREATE INDEX MRGN_EU.PAL_RPA_IPC_IND ON MRGN_EU.PAL_RPA_IPC
 LOGGING
 NOPARALLEL;--END REGION
                                     
---REGION ADD VAR COST CONTRACT EXCLUDED FLAG (added 10 mins to the process)
+--REGION 7 ADD VAR COST CONTRACT EXCLUDED FLAG (added 10 mins to the process)
 create table PAL_RPA_EXCL_FLG AS 
 SELECT * FROM(WITH D_IPC     AS (SELECT DISTINCT VrCst_CNTRCT_TIER_ID, DIM_CUST_CURR_ID FROM PAL_RPA_IPC),
                    EXCLD_FLG AS (SELECT  --DISTINCT THERE SHOULD BE A 1 TO 1 RELATIONSHIP THAT MEANS i DON'T NEED THIS
@@ -491,10 +478,10 @@ SELECT * FROM(WITH D_IPC     AS (SELECT DISTINCT VrCst_CNTRCT_TIER_ID, DIM_CUST_
               SELECT DISTINCT I.*,
                      coalesce(E.VrCst_CONT_EXCLD, 'N') as VrCst_CONT_EXCLD
               FROM   D_IPC I
-              LEFT JOIN EXCLD_FLG E ON E.DIM_CUST_CURR_ID = I.DIM_CUST_CURR_ID
-                                   AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);--end region 
+              JOIN EXCLD_FLG E ON E.DIM_CUST_CURR_ID = I.DIM_CUST_CURR_ID
+                              AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);--end region 
                                    
---region 7 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis--
+--region 8 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis--
 CREATE TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN AS
 select * from(
 with MMR_DAILY_TXN as (SELECT RPA.ACCT_ITEM_KEY, sls.*, 
@@ -546,7 +533,7 @@ SUM (CASE WHEN GP_DOLLAR < 0 THEN
 FROM MRGN_EU.MMR_DAILY_TXN
 WHERE SYS_PLTFRM = 'EC');--end region 
 
---region 8 ATTRIBUTE FLGS
+--region 9 ATTRIBUTE FLGS
 CREATE TABLE PAL_ATTRBT_FLGS AS
 SELECT * FROM(
 WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID, 
@@ -572,6 +559,7 @@ WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID,
      VRCST  AS (SELECT  VrCst_CNTRCT_TIER_ID,
                         TIER_ATTRBT_ELGBLTY_FLG,
                         TIER_BASE_FLG,
+                        CNTRCT_SRC_CD AS VRCST_ORGN_SCR,
                         ACCT_ITEM_KEY
                FROM      ALL_3 A
                   join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.VrCst_CNTRCT_TIER_ID)
@@ -583,7 +571,7 @@ SELECT DISTINCT
        CURR.TIER_BASE_FLG            AS CURR_CONT_TIER_BASE_FLG,
        VRCST.TIER_ATTRBT_ELGBLTY_FLG AS VRCST_CONT_ATR_ELIG_FLG,
        VRCST.TIER_BASE_FLG           AS VRCST_CONT_TIER_BASE_FLG,
-       CURR.CURR_ORGN_SCR,
+       CURR.CURR_ORGN_SCR,           VRCST.VRCST_ORGN_SCR,
        ALL_3.ACCT_ITEM_KEY  
 FROM   ALL_3
     LEFT JOIN BSLN ON ALL_3.ACCT_ITEM_KEY = BSLN.ACCT_ITEM_KEY and ALL_3.BL_CNTRCT_TIER_ID      = BSLN.BL_CNTRCT_TIER_ID
@@ -591,8 +579,7 @@ FROM   ALL_3
     LEFT JOIN VRCST ON ALL_3.ACCT_ITEM_KEY = VRCST.ACCT_ITEM_KEY AND ALL_3.VRCST_CNTRCT_TIER_ID = VRCST.VRCST_CNTRCT_TIER_ID
     );--END REGION
     
---REGION 9 GPO, HIN, DEA, RX INFO
-
+--REGION 10 GPO, HIN, DEA, RX INFO
 CREATE TABLE PAL_RPA_GPO_DEA_HIN AS ( SELECT * FROM (
     WITH ACCOUNTS AS (SELECT M.SHIP_TO
                       FROM MRGN_EU.PAL_RPA_CASES RPA  
@@ -645,10 +632,11 @@ CREATE TABLE PAL_RPA_GPO_DEA_HIN AS ( SELECT * FROM (
       --, CASE WHEN CC.PRCA_NUM = CC.CUST_E1_NUM THEN 'Y' ELSE NULL END as "PRCA Flag"
       --, CASE WHEN PCCA.PAY55RAN8 = CC.CUST_E1_NUM THEN 'Y' ELSE NULL END as "PCCA Flag"
       --, CC.BILL_TO_CUST_NUM as "Bill To" */
-        CC.CUST_E1_NUM              as Ship_To
+        CC.CUST_E1_NUM            as Ship_To
       , CC.HLTH_INDSTRY_NUM       as HIN
       , CC.DEA_LIC_NUM            as DEA
       , CC.DEA_LIC_EXPR_DT        as DEA_Exp_Date
+      --, CC.MMS_SUB_CLASS_DSC      AS MKT_SUB_CLS
       , CTE2.COTNum               as GPO_CoT
       , CTE2.GPOCOT               as GPO_CoT_Name
       , CTE2.Flag                 as Prmry_GPO_Flag
@@ -670,13 +658,49 @@ AND CC.ACTV_FLG = 'Y'
 --AND to_date(to_char(PCCA.PAEFFT+1900000),'YYYYDDD') > SYSDATE --Selects the current PCCA
 ));--END REGION
 
+--region 11 address
+create table PAL_RPA_ADDRESS AS
+SELECT * FROM(
+WITH ADDRESS AS (
+SELECT DISTINCT a.SYS_PLTFRM, a.BUS_PLTFRM, a.ACCT_OR_BILL_TO as CUST_KEY,
+                b.ADDRSS_LINE1, b.ADDRSS_LINE2, b.ADDRSS_LINE3, b.ADDRSS_LINE4, b.CITY, b.STATE, b.ZIP, 'N' as ALT_ADDRSS
+                FROM   MRGN_EU.PAL_RPA_IPC a
+                  JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR b ON a.ACCT_OR_BILL_TO = b.CUST_LGCY_NUM 
+                                                        AND a.BUS_PLTFRM = b.BUS_PLTFRM 
+                WHERE b.SYS_PLTFRM IN ('EC', 'E1')
+                -----------------------------------------------------------------------------------------------------------------------------------------------
+                UNION ALL
+                SELECT DISTINCT 
+                a.SYS_PLTFRM, a.BUS_PLTFRM, a.SHIP_TO as CUST_KEY, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD1 ELSE sub1.ALADD1 END AS ADDRSS_LINE1, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD2 ELSE sub1.ALADD2 END AS ADDRSS_LINE2, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD3 ELSE sub1.ALADD3 END AS ADDRSS_LINE3, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD4 ELSE sub1.ALADD4 END AS ADDRSS_LINE4, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATCTY1 ELSE sub1.ALCTY1 END AS CITY, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDS ELSE sub1.ALADDS END AS STATE, 
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDZ ELSE sub1.ALADDZ END AS ZIP,
+                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN 'N' ELSE 'Y' END AS ALT_ADDRSS
+                FROM MRGN_EU.PAL_RPA_IPC a
+                INNER JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR b ON a.SHIP_TO = b.CUST_E1_NUM AND a.BUS_PLTFRM = b.BUS_PLTFRM 
+                LEFT JOIN MMSDM910.SRC_E1_MMS_F5521ALT g ON a.ACCT_OR_BILL_TO = g.ATAN8
+                LEFT JOIN 
+                  (SELECT * FROM 
+                    (SELECT DISTINCT ALAN8, ALEFTB, ALADD1, ALADD2, ALADD3, ALADD4, ALCTY1, ALADDS, ALADDZ, RANK() OVER (PARTITION BY ALAN8 ORDER BY ALEFTB DESC) as RNK
+                    FROM MMSDM910.SRC_E1_MMS_F0116 a
+                    INNER JOIN MRGN_EU.PAL_RPA_IPC s ON s.SHIP_TO = a.ALAN8)
+                  WHERE RNK = 1)sub1 ON a.SHIP_TO = sub1.ALAN8)
+SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
+       ADDRESS.ADDRSS_LINE1|| ' ' ||ADDRESS.ADDRSS_LINE2|| ' ' ||ADDRESS.ADDRSS_LINE3|| ' ' ||ADDRESS.ADDRSS_LINE4|| ', ' || ADDRESS.CITY|| ', ' ||ADDRESS.STATE|| ' ' ||ADDRESS.ZIP AS "ADDRESS", 
+       ADDRESS.ADDRSS_LINE1, ADDRESS.ADDRSS_LINE2, ADDRESS.ADDRSS_LINE3, ADDRESS.ADDRSS_LINE4, ADDRESS.CITY, ADDRESS.STATE, ADDRESS.ZIP 
+       FROM ADDRESS);
+--end region
+
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
 DROP TABLE PAL_RPA; COMMIT;
 create table PAL_RPA as
 
 /*REPLACE THIS DROP TABLE CREATE TABLE WITH THE INSERT STATEMENT BELOW SO ROWS CAN BE EXCLUDED IN THE FIRST STEP
   INSERT INTO PAL_RPA */
-
 
 --I GROUPED THE FIELDS TO REVEAL REDUNDANCY. I HOPE TO LOSE SOME OF THESE.
 SELECT  distinct --REGION 
@@ -688,6 +712,8 @@ SELECT  distinct --REGION
         IPC.BID_OR_PRCA,         IPC.BID_OR_PRCA_NAME,
         IPC.LPG_ID,              IPC.LPG_DESC,
         IPC.PRICE_SOURCE_PCCA,
+        -----------ADDRESS-------------------
+        ADDRESS.ADDRESS, ADDRESS.ADDRSS_LINE1, ADDRESS.ADDRSS_LINE2, ADDRESS.ADDRSS_LINE3, ADDRESS.ADDRSS_LINE4, ADDRESS.CITY, ADDRESS.STATE, ADDRESS.ZIP,
         -----------ITEM----------- 
         M.ITEM_AS400_NUM,        M.ITEM_E1_NUM, 
         M.BL_QTY,                M.CURR_QTY,              
@@ -717,8 +743,11 @@ SELECT  distinct --REGION
         M.CURR_MIN_VAR_CST,      IPC.MN_LPG_PRCA_COST,
         IPC.VAR_CST_CONT,        IPC.VAR_CST_CONT_NAME,
         IPC.VAR_CST_CONT_TYPE,   IPC.PRCNT_CNCTD,
- --       CASE WHEN TO_NUMBER(SUBSTR(IPC.VAR_CST_CONT,0,(INSTR (IPC.VAR_CST_CONT, '-', -1)) - 1)) = (CASE WHEN M.CURR_MCK_CONT is null THEN M.BL_TRIG_MCK_CONT  ELSE M.CURR_MCK_CONT END) THEN 'Y' else 'N' end as ST_CNCTD,
-        IPC.PCCA_CNCTD,          --for test IPC.VrCst_CONT_EXCLD,
+        CASE WHEN IPC.VAR_MCK_CONT_ID = (CASE WHEN M.CURR_MCK_CONT is null THEN M.BL_TRIG_MCK_CONT  ELSE M.CURR_MCK_CONT END) 
+             THEN 'Y' else 'N' end as ST_CNCTD,
+        IPC.PCCA_CNCTD,          E.VrCst_CONT_EXCLD,
+        VRCST_CONT_ATR_ELIG_FLG, VRCST_CONT_TIER_BASE_FLG,
+        VRCST_ORGN_SCR,
         -----------PRICE-----------
         M.BL_SELL_PRICE,         CASE WHEN M.CURR_SELL_PRICE    is null THEN M.BL_TRIG_SELL_PRICE   ELSE M.CURR_SELL_PRICE    END AS  CURR_SELL_PRICE,        
         M.BL_PRC_RULE,           CASE WHEN M.CURR_PRC_RULE      is null THEN M.BL_TRIG_PRC_RULE     ELSE M.CURR_PRC_RULE      END AS  CURR_PRC_RULE,              
@@ -729,8 +758,9 @@ SELECT  distinct --REGION
         -----------MARGIN-----------
         M.BL_MARGIN,             CASE WHEN M.CURR_MARGIN      is null THEN M.BL_TRIG_MARGIN       ELSE  M.CURR_MARGIN       END AS CURR_MARGIN,
         M.BL_MARGIN_PERC,        CASE WHEN M.CURR_MARGIN_PERC is null THEN M.BL_TRIG_MARGIN_PERC  ELSE  M.CURR_MARGIN_PERC  END AS CURR_MARGIN_PERC,        
-        TXN.NEG_SLS_3_MTH AS ACTL_NEG_M,      TXN.NEG_SLS_3_MTH*4 AS PROJ_NEG_M, 
-        TXN.SLS_3_MTH     AS ACTL_GP,         TXN.SLS_3_MTH*4     AS PROJ_GP,
+        TXN.NEG_SLS_3_MTH                 AS ACTL_NEG_M,      TXN.NEG_SLS_3_MTH*4 AS PROJ_NEG_M,
+        TXN.SLS_3_MTH                     AS ACTL_SLS,        TXN.SLS_3_MTH*4     AS PROJ_SLS,
+        TXN.SLS_3_MTH - TXN.CST_3_MTH     AS ACTL_GP,         (TXN.SLS_3_MTH - TXN.CST_3_MTH)*4     AS PROJ_GP,
         -----------CONTRACT-----------
         M.BL_MCK_CONT,           M.BL_MFG_CONT,        M.BL_MFG_CONT_NAME,        M.BL_CONT_TYPE,
         CASE WHEN M.CURR_MCK_CONT       is null THEN M.BL_TRIG_MCK_CONT       ELSE M.CURR_MCK_CONT       END AS  CURR_MCK_CONT,
@@ -740,17 +770,17 @@ SELECT  distinct --REGION
         BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
         CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
         M.BL_ITEM_END_DT,        M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
-       -- CURR_ORGN_SCR,
+        CURR_ORGN_SCR,
         -----------GPO-----------
         M.BL_CUST_PRIM_GPO_NUM,   M.BL_TRIG_CUST_PRIM_GPO_NUM, 
         M.CURR_CUST_PRIM_GPO_NUM 
         ,GPO.HIN              ,GPO.DEA            ,GPO.DEA_Exp_Date
-        ,GPO.GPO_CoT          ,GPO.GPO_CoT_Name
+        ,GPO.GPO_CoT          ,GPO.GPO_CoT_Name   --,GPO.MKT_SUB_CLS
         ,GPO.Prmry_GPO_Flag   ,GPO.Prmry_GPO_Num  ,GPO.Prmry_GPO_Name  ,GPO.Prmry_GPO_ID
         ,GPO.GPO_Mmbrshp_St   ,GPO.Prmry_aff_St
         ,GPO.RX_GPO_Num       ,GPO.RX_GPO_Name    ,GPO.RX_GPO_ID
         -----------REP-----------
-        ,M.MSTR_GRP_NUM,         M.MSTR_GRP_NAME,
+        ,M.MSTR_GRP_NUM,        M.MSTR_GRP_NAME,
         M.ACCT_MGR_NAME,        M.DECISION_MAKER,
         -----------LM-----------
         M.LM_PERC_CAP,          M.LM_OPP_MRGN_PERC, 
@@ -767,39 +797,33 @@ join MRGN_EU.PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY
 JOIN MRGN_EU.PAL_RPA_IPC IPC  ON M.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
 ---------------------------------------------POOL NAME FOR FILENAME LOGIC-------------------------------------------
 left JOIN MRGN_EU.PAL_RPA_POOL_E1 PN ON PN.POOL_NUM = PAL_RPA_cases.POOL_NUM
-                            AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
+                                    AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
 ----------------------------GPO, HIN, DEA, RX GPO, PRMRY GPO--------------------------------------------------------
 left join MRGN_EU.PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
--------------NOT TESTED-------------8/12-----------
 JOIN MRGN_EU.PAL_ATTRBT_FLGS ON M.ACCT_ITEM_KEY = PAL_ATTRBT_FLGS.ACCT_ITEM_KEY 
+-------------------------------------------------
 left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
+---------------------------------------------var cost excld flag---------------------------------------------------------
+left join MRGN_EU.PAL_RPA_EXCL_FLG  E  ON E.DIM_CUST_CURR_ID = IPC.DIM_CUST_CURR_ID
+                                      AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
+LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS ON ADDRESS.SYS_PLTFRM = M.SYS_PLTFRM   
+                                         AND ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
+                                         AND ADDRESS.CUST_KEY = M.SHIP_TO
 ;
 
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e6582x6; --the STRAT bot
- GRANT SELECT ON MRGN_EU.PAL_RPA_PREP TO MFC_CTRT_ADMIN_BITEAM_AU; --api
- GRANT SELECT ON MRGN_EU.PAL_RPA_PREP TO MFC_CTRT_ADMIN_BITEAM_AU; --api
- GRANT SELECT ON MRGN_EU.PAL_RPA TO edt731a;  -- Sharieff: 
- GRANT SELECT ON MRGN_EU.PAL_RPA TO e0w4qu;   --Vivek: 
+ GRANT SELECT ON MRGN_EU.PAL_RPA TO MFC_CTRT_ADMIN_BITEAM_AU; --api 
+ GRANT SELECT ON MRGN_EU.PAL_RPA TO e0w4quu;   --Vivek:
+-- GRANT SELECT ON MRGN_EU.PAL_RPA TO edt731a;  -- Sharieff:
 --end region
                       
 --region DROP THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
-
-drop table PAL_RPA_2d;
-drop table PAL_RPA_2f;
-drop table PAL_RPA_2g;
-
 drop table PAL_RPA_POOL_E1;
-
-DROP TABLE PAL_RPA_2h;
-DROP TABLE PAL_RPA_3A;
-DROP TABLE PAL_RPA_3B;
-DROP TABLE PAL_RPA_3C;
-DROP TABLE PAL_RPA_4A;
-DROP TABLE PAL_RPA_4B;
- 
 drop table PAL_RPA_CASES;
 drop table PAL_RPA_IPC;
+drop table PAL_RPA_EXCL_FLG;
 drop table PAL_ATTRBT_FLGS; 
 DROP TABLE PAL_RPA_GPO_DEA_HIN; 
+DROP TABLE PAL_RPA_ADDRESS;
 DROP TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN;COMMIT;--end region
