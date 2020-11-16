@@ -756,9 +756,9 @@ SELECT  distinct --REGION
         -----------MARGIN-----------
         M.BL_MARGIN,             CASE WHEN M.CURR_MARGIN      is null THEN M.BL_TRIG_MARGIN       ELSE  M.CURR_MARGIN       END AS CURR_MARGIN,
         M.BL_MARGIN_PERC,        CASE WHEN M.CURR_MARGIN_PERC is null THEN M.BL_TRIG_MARGIN_PERC  ELSE  M.CURR_MARGIN_PERC  END AS CURR_MARGIN_PERC,        
-        TXN.NEG_SLS_3_MTH                 AS ACTL_NEG_M,      TXN.NEG_SLS_3_MTH*4 AS PROJ_NEG_M,
-        TXN.SLS_3_MTH                     AS ACTL_SLS,        TXN.SLS_3_MTH*4     AS PROJ_SLS,
-        TXN.SLS_3_MTH - TXN.CST_3_MTH     AS ACTL_GP,         (TXN.SLS_3_MTH - TXN.CST_3_MTH)*4     AS PROJ_GP,
+        TXN.NEG_SLS_3_MTH - TXN.NEG_CST_3_MTH  AS ACTL_NEG_M,      (TXN.NEG_SLS_3_MTH - TXN.NEG_CST_3_MTH)*4 AS PROJ_NEG_M,
+        TXN.SLS_3_MTH                          AS ACTL_SLS,        TXN.SLS_3_MTH*4     AS PROJ_SLS,
+        TXN.SLS_3_MTH - TXN.CST_3_MTH          AS ACTL_GP,         (TXN.SLS_3_MTH - TXN.CST_3_MTH)*4     AS PROJ_GP,
         -----------CONTRACT-----------
         M.BL_MCK_CONT,           M.BL_MFG_CONT,        M.BL_MFG_CONT_NAME,        M.BL_CONT_TYPE,
         CASE WHEN M.CURR_MCK_CONT       is null THEN M.BL_TRIG_MCK_CONT       ELSE M.CURR_MCK_CONT       END AS  CURR_MCK_CONT,
