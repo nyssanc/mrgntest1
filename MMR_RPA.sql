@@ -5,7 +5,7 @@
 Create table PAL_RPA_MMR_DATA as 
 (Select M.ACCT_ITEM_KEY, 
         M.BL_MFG_CONT,
-        M.BL_MFG_CONT_CHANGE,
+        CASE WHEN M.CURR_DATE = M.BL_DATE THEN M.BL_TRIG_MFG_CONT ELSE M.CURR_MFG_CONT END AS CURR_MFG_CONT,
         M.ITEM_E1_NUM,
         CASE WHEN CURR_DATE = BL_DATE THEN ((M.BL_TRIG_COST - M.BL_COST)*CURR_QTY*4)
              ELSE ((M.CURR_COST - M.BL_COST)*CURR_QTY*4)
@@ -99,7 +99,11 @@ with PAL_RPA_2a as (SELECT ACCT_ITEM_KEY,
                    where MMR_TYPE in ('CCI','CCI/LM') -- may need to add more fields
                          and COST_IMPACT > 0
                          AND SYS_PLTFRM = 'E1' --removeD AS400 so that it can be passed on to STRAT
-                         and BL_MFG_CONT_CHANGE <> 'SAME CONRACT'),--end region
+                         --and BL_MFG_CONT_CHANGE <> 'SAME CONRACT'
+/*added this line to remove valid cost increases from the cct dataset but leave in the others 11-16-20
+  a valid cost increase is where the contract change was from A to A*/
+                         and BL_MFG_CONT <> CURR_MFG_CONT
+                         ),--end region
 --region 2B EntCont Issues
 PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,  
                       BL_MFG_CONT, 
