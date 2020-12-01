@@ -450,7 +450,9 @@ SELECT DISTINCT
       FROM  H
       LEFT JOIN EDWRPT.V_DIM_CNTRCT_TIER CT ON CT.CNTRCT_NUM = H.Var_MCK_CONT_ID
                                            AND CT.TIER_NUM   = H.Var_MCK_CONT_TIER
-      LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_NUM);                                           --END REGION       
+      LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_E1_NUM
+                                           AND H.BUS_PLTFRM  = C.BUS_PLTFRM
+                                           AND H.SYS_PLTFRM  = C.SYS_PLTFRM);                                           --END REGION       
 --END REGION                                          
 
 --REGION INDEX AND DISTINCT IPC
@@ -483,7 +485,7 @@ SELECT * FROM(WITH D_IPC     AS (SELECT DISTINCT VrCst_CNTRCT_TIER_ID, DIM_CUST_
               JOIN EXCLD_FLG E ON E.DIM_CUST_CURR_ID = I.DIM_CUST_CURR_ID
                               AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);--end region 
                                    
---region 8 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis--
+--region 8 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (10 mins)
 CREATE TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN AS
 select * from(
 with MMR_DAILY_TXN as (SELECT RPA.ACCT_ITEM_KEY,   
@@ -668,34 +670,36 @@ AND CC.ACTV_FLG = 'Y'
 --region 11 address
 create table PAL_RPA_ADDRESS AS
 SELECT * FROM(
-WITH ADDRESS AS (
-SELECT DISTINCT a.SYS_PLTFRM, a.BUS_PLTFRM, a.ACCT_OR_BILL_TO as CUST_KEY,
-                b.ADDRSS_LINE1, b.ADDRSS_LINE2, b.ADDRSS_LINE3, b.ADDRSS_LINE4, b.CITY, b.STATE, b.ZIP, 'N' as ALT_ADDRSS
+WITH ADDRESS AS (SELECT DISTINCT a.SYS_PLTFRM, a.BUS_PLTFRM, a.ACCT_OR_BILL_TO as CUST_KEY,
+                                 b.ADDRSS_LINE1, b.ADDRSS_LINE2, b.ADDRSS_LINE3, b.ADDRSS_LINE4, b.CITY, b.STATE, b.ZIP, 'N' as ALT_ADDRSS
                 FROM   MRGN_EU.PAL_RPA_IPC a
                   JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR b ON a.ACCT_OR_BILL_TO = b.CUST_LGCY_NUM 
                                                         AND a.BUS_PLTFRM = b.BUS_PLTFRM 
                 WHERE b.SYS_PLTFRM IN ('EC', 'E1')
+                  and a.SYS_PLTFRM = 'AS400'
                 -----------------------------------------------------------------------------------------------------------------------------------------------
                 UNION ALL
-                SELECT DISTINCT 
-                a.SYS_PLTFRM, a.BUS_PLTFRM, a.SHIP_TO as CUST_KEY, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD1 ELSE sub1.ALADD1 END AS ADDRSS_LINE1, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD2 ELSE sub1.ALADD2 END AS ADDRSS_LINE2, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD3 ELSE sub1.ALADD3 END AS ADDRSS_LINE3, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD4 ELSE sub1.ALADD4 END AS ADDRSS_LINE4, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATCTY1 ELSE sub1.ALCTY1 END AS CITY, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDS ELSE sub1.ALADDS END AS STATE, 
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDZ ELSE sub1.ALADDZ END AS ZIP,
-                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN 'N' ELSE 'Y' END AS ALT_ADDRSS
-                FROM MRGN_EU.PAL_RPA_IPC a
-                INNER JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR b ON a.SHIP_TO = b.CUST_E1_NUM AND a.BUS_PLTFRM = b.BUS_PLTFRM 
-                LEFT JOIN MMSDM910.SRC_E1_MMS_F5521ALT g ON a.ACCT_OR_BILL_TO = g.ATAN8
-                LEFT JOIN 
-                  (SELECT * FROM 
-                    (SELECT DISTINCT ALAN8, ALEFTB, ALADD1, ALADD2, ALADD3, ALADD4, ALCTY1, ALADDS, ALADDZ, RANK() OVER (PARTITION BY ALAN8 ORDER BY ALEFTB DESC) as RNK
-                    FROM MMSDM910.SRC_E1_MMS_F0116 a
-                    INNER JOIN MRGN_EU.PAL_RPA_IPC s ON s.SHIP_TO = a.ALAN8)
-                  WHERE RNK = 1)sub1 ON a.SHIP_TO = sub1.ALAN8)
+                SELECT DISTINCT a.SYS_PLTFRM, a.BUS_PLTFRM, a.SHIP_TO as CUST_KEY, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD1 ELSE sub1.ALADD1 END AS ADDRSS_LINE1, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD2 ELSE sub1.ALADD2 END AS ADDRSS_LINE2, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD3 ELSE sub1.ALADD3 END AS ADDRSS_LINE3, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADD4 ELSE sub1.ALADD4 END AS ADDRSS_LINE4, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATCTY1 ELSE sub1.ALCTY1 END AS CITY, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDS ELSE sub1.ALADDS END AS STATE, 
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN g.ATADDZ ELSE sub1.ALADDZ END AS ZIP,
+                                CASE WHEN b.HC_DLVRY_CD = 'PHD' AND b.CNVRSN_TYPE_CD = 'E' THEN 'N' ELSE 'Y' END AS ALT_ADDRSS
+                FROM      MRGN_EU.PAL_RPA_IPC a
+                JOIN      EDWRPT.V_DIM_CUST_E1_BLEND_CURR b ON a.SHIP_TO = b.CUST_E1_NUM AND a.BUS_PLTFRM = b.BUS_PLTFRM 
+                LEFT JOIN MMSDM910.SRC_E1_MMS_F5521ALT g    ON a.ACCT_OR_BILL_TO = g.ATAN8
+                LEFT JOIN (SELECT * FROM (SELECT DISTINCT ALAN8, ALEFTB, ALADD1, ALADD2, ALADD3, ALADD4, ALCTY1, ALADDS, ALADDZ, RANK() OVER (PARTITION BY ALAN8 ORDER BY ALEFTB DESC) as RNK
+                                          FROM MMSDM910.SRC_E1_MMS_F0116 a
+                                          JOIN MRGN_EU.PAL_RPA_IPC s ON s.SHIP_TO = a.ALAN8
+                                          )
+                           WHERE RNK = 1
+                           )sub1 ON a.SHIP_TO = sub1.ALAN8
+                  WHERE b.SYS_PLTFRM IN ('E1')
+                    AND a.SYS_PLTFRM = 'E1'
+                )
 SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
        ADDRESS.ADDRSS_LINE1|| ' ' ||ADDRESS.ADDRSS_LINE2|| ' ' ||ADDRESS.ADDRSS_LINE3|| ' ' ||ADDRESS.ADDRSS_LINE4|| ', ' || ADDRESS.CITY|| ', ' ||ADDRESS.STATE|| ' ' ||ADDRESS.ZIP AS "ADDRESS", 
        ADDRESS.ADDRSS_LINE1, ADDRESS.ADDRSS_LINE2, ADDRESS.ADDRSS_LINE3, ADDRESS.ADDRSS_LINE4, ADDRESS.CITY, ADDRESS.STATE, ADDRESS.ZIP 
@@ -703,8 +707,8 @@ SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
 --end region
 
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
-DROP TABLE PAL_RPA; COMMIT;
-create table PAL_RPA as
+DROP TABLE PAL_RPA_wip; COMMIT;
+create table PAL_RPA_wip as
 
 /*REPLACE THIS DROP TABLE CREATE TABLE WITH THE INSERT STATEMENT BELOW SO ROWS CAN BE EXCLUDED IN THE FIRST STEP
   INSERT INTO PAL_RPA */
@@ -812,7 +816,7 @@ JOIN MRGN_EU.PAL_ATTRBT_FLGS AF ON M.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY
 -------------------------------------------------
 left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
 ---------------------------------------------var cost excld flag---------------------------------------------------------
-left join MRGN_EU.PAL_RPA_EXCL_FLG  E  ON E.DIM_CUST_CURR_ID = IPC.DIM_CUST_CURR_ID
+left join MRGN_EU.PAL_RPA_EXCL_FLG  E  ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
                                       AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
 LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS ON ADDRESS.SYS_PLTFRM = M.SYS_PLTFRM   
                                          AND ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
@@ -835,7 +839,6 @@ DROP TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN;
 drop table PAL_ATTRBT_FLGS; 
 DROP TABLE PAL_RPA_GPO_DEA_HIN; 
 DROP TABLE PAL_RPA_ADDRESS;COMMIT;--end region
-
 
 -----------------------------
 
