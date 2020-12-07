@@ -391,6 +391,7 @@ SELECT DISTINCT
         P.ITEM_E1_NUM,
         P.COST_IMPACT,
         P.BL_DATE,
+        P.CURR_DATE,
         P.BL_REASON_CD,
         P.BL_EXPLANATION,
         P.BL_COST,
