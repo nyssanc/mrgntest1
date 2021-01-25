@@ -1,4 +1,4 @@
---HAH_IPC AND MMR_STATUS_FINAL WERE BOTH SWITCHED OUT FOR HAH_IPC_10_21 & PAL_MMR_STATUS_FINAL
+--HAH_IPC AND MMR_STATUS_FIN/AL WERE BOTH SWITCHED OUT FOR HAH_IPC_10_21 & PAL_MMR_STATUS_FINAL/
 --CREATE TABLE HAH_IPC AS SELECT * FROM HAH_IPC;
 
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
@@ -19,17 +19,17 @@ Create table PAL_RPA_MMR_DATA as
         M.SYS_PLTFRM,
         M.MSTR_GRP_NUM,
         CASE  WHEN M.SYS_PLTFRM = 'AS400'  THEN (M.ACCT_OR_BILL_TO || M.SYS_PLTFRM || M.ITEM_AS400_NUM || '-' || M.BL_DATE)
-              WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test
+              WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test -- this is to help me figure out nicks exclusions
  from MMR_STATUS_FINAL M  
  --exlcuding my previously assigned lines
-      join (Select ACCT_ITEM_KEY from MMR_STATUS_FINAL
+     join (Select ACCT_ITEM_KEY from MMR_STATUS_FINAL
              MINUS 
-            Select ACCT_ITEM_KEY from PAL_ASNGD_CASES_TEST
-            where INSERT_DT > trunc(sysdate) - case when TEAM_ASSIGNED = 'CCT'   THEN 90
-                                                    WHEN TEAM_ASSIGNED = 'STRAT' THEN 0  --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
-                                                    WHEN TEAM_ASSIGNED = 'NM'    THEN 90
+            Select ACCT_ITEM_KEY from PAL_RPA
+            where INSRT_DT > trunc(sysdate) - case when TEAM_ASSIGNED = 'CCT'   THEN 90
+                                                   WHEN TEAM_ASSIGNED = 'STRAT' THEN 25  --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
+                                                   WHEN TEAM_ASSIGNED = 'NM'    THEN 90
                                                 END
-            ) x on x.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
+            ) x on x.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY 
 ------exclude negative load lines
  WHERE (M.BL_MFG_CONT <>  'MCKB-NEG-LD' or M.BL_MFG_CONT is null) 
     --and SYS_PLTFRM = 'E1'  --GET BOTH E1 AND AS400 AND THEN DIVIDE.
@@ -65,24 +65,32 @@ Create table PAL_RPA_MMR_DATA as
 
 --region SEPERATE E1 AND AS400 DATA
 CREATE TABLE PAL_RPA_E1 AS    SELECT M.* FROM PAL_RPA_MMR_DATA M WHERE SYS_PLTFRM = 'E1';
-CREATE TABLE PAL_RPA_AS400 AS SELECT M.* FROM PAL_RPA_MMR_DATA M    JOIN PAL_AS400_STRAT_MSTR_GRPS G   ON G.MASTER_GROUP_NUM = M.MSTR_GRP_NUM
+CREATE TABLE PAL_RPA_AS400 AS SELECT M.*, G.POOL_NUM, G.POOL_NAME 
+                                         FROM PAL_RPA_MMR_DATA M    
+                                         JOIN HAH_STRAT_LOOKUP G   ON G.POOL_NUM = M.MSTR_GRP_NUM
                                                                WHERE SYS_PLTFRM = 'AS400'; --END REGION
                                                                
---REGION GET POOL NUM AND NAME BY E1 BILL_TO. used in 2h, 3a and final table
-create table PAL_RPA_POOL_E1 AS
-(SELECT sub2.ACCT_OR_BILL_TO, sub2.DIM_POOL_ID, sub2.POOL_NUM, sub2.POOL_NAME, sub2.POOL_TYPE_NUM, sub2.POOL_TYPE_DSC, 'E1' as SYS_PLTFRM  --THIS ALLOWS ME TO JOIN ON THESES POOL NUMBERS KNOWING THAT THIS IS E1 ONLY
- FROM  (SELECT sub1.*, RANK() OVER (PARTITION BY sub1.ACCT_OR_BILL_TO ORDER BY sub1.CUST_POOL_START_DT DESC) as POOL_DT_RNK
-        FROM  (SELECT DISTINCT a.ACCT_OR_BILL_TO, p.DIM_POOL_ID, p.POOL_NUM, p.POOL_NAME, p.POOL_TYPE_NUM, p.POOL_TYPE_DSC, cp.CUST_POOL_START_DT, cp.CUST_POOL_END_DT
+--REGION GET POOL NUM AND NAME BY E1 BILL_TO. used in 2h, 3a and final table, changed name from PAL_RPA_POOL 1/19/21
+create table PAL_RPA_POOL AS
+SELECT* FROM (
+with sub1 as (SELECT DISTINCT a.ACCT_OR_BILL_TO, p.POOL_NUM, p.POOL_NAME, cp.CUST_POOL_START_DT, a.SYS_PLTFRM
                FROM       PAL_RPA_E1 a  --changed from mmr_status on 8/7/20
                      JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR cust ON a.ACCT_OR_BILL_TO = cust.BILL_TO_CUST_E1_NUM 
                      JOIN EDWRPT.V_DIM_CUST_POOL cp            ON cust.DIM_BILL_TO_CUST_CURR_ID = cp.DIM_CUST_CURR_ID
                      JOIN EDWRPT.V_DIM_POOL p                  ON cp.DIM_POOL_ID = p.DIM_POOL_ID
                WHERE     cp.CUST_POOL_END_DT  > SYSDATE
                      AND p.POOL_TYPE_NUM      IN ('3','4','5','6','7')
-                     and a.SYS_PLTFRM = 'E1'
-               )sub1
-        )sub2
- WHERE sub2.POOL_DT_RNK = 1);-- END REGION
+               ),
+     sub2 as (SELECT sub1.*, RANK() OVER (PARTITION BY sub1.ACCT_OR_BILL_TO ORDER BY sub1.CUST_POOL_START_DT DESC) as POOL_DT_RNK
+              FROM  sub1
+              )
+SELECT sub2.ACCT_OR_BILL_TO, SUB2.SYS_PLTFRM, sub2.POOL_NUM, TO_CHAR(sub2.POOL_NAME) POOL_NAME
+FROM  sub2
+WHERE sub2.POOL_DT_RNK = 1
+union   --ADDED AS400 DATA /
+select a.ACCT_OR_BILL_TO, a.SYS_PLTFRM, a.POOL_NUM,  TO_CHAR(A.POOL_NAME) POOL_NAME
+from PAL_RPA_AS400 a)
+;-- END REGION
 
 --region cct cases
 CREATE TABLE PAL_RPA_2g AS
@@ -95,7 +103,7 @@ with PAL_RPA_2a as (SELECT ACCT_ITEM_KEY,
                           MMR_TYPE,
                           COST_IMPACT,
                           PNDG_MMR_OPP
-                   from PAL_RPA_E1
+                   from PAL_RPA_E1 --cct only cares about e1 data
                    where MMR_TYPE in ('CCI','CCI/LM') -- may need to add more fields
                          and COST_IMPACT > 0
                          AND SYS_PLTFRM = 'E1' --removeD AS400 so that it can be passed on to STRAT
@@ -174,7 +182,7 @@ SELECT * FROM PAL_RPA_2d
 ); --end region
 --end region
 
---region COLLECT STRAT E1, STRAT AS400 AND NM CASES AND UNION ALL CASE GROUPS
+--region PAL_RPA_CASES: COLLECT STRAT E1, STRAT AS400 AND NM CASES AND UNION ALL CASE GROUPS
 CREATE TABLE PAL_RPA_CASES AS SELECT * FROM (
 --region 3a ADD POOL TO MAIN, need to filter to e1 data only
 WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
@@ -183,8 +191,8 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                            ,x.ACCT_ITEM_KEY,
                            x.PNDG_MMR_OPP
                     from PAL_RPA_E1 x
-                         Left Join PAL_RPA_POOL_E1 P on x.ACCT_OR_BILL_TO = P.ACCT_OR_BILL_TO
-                                                     AND X.SYS_PLTFRM = P.SYS_PLTFRM),--end region
+                         Left Join PAL_RPA_POOL P on x.ACCT_OR_BILL_TO = P.ACCT_OR_BILL_TO
+                                                 AND X.SYS_PLTFRM = P.SYS_PLTFRM),--end region
 --region 2h ADD POOL TO CCT CASES ONE OF THE CASE GROUPS
      PAL_RPA_2h as(SELECT G.ACCT_ITEM_KEY,
                           G.CASE_PREFIX, 
@@ -708,11 +716,22 @@ SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
 --end region
 
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
-DROP TABLE PAL_RPA_wip; COMMIT;
-create table PAL_RPA_wip as
-
-/*REPLACE THIS DROP TABLE CREATE TABLE WITH THE INSERT STATEMENT BELOW SO ROWS CAN BE EXCLUDED IN THE FIRST STEP
-  INSERT INTO PAL_RPA */
+ INSERT INTO PAL_RPA  
+ (ACCT_ITEM_KEY, SYS_PLTFRM, BUS_PLTFRM, HIGHEST_CUST_NAME, ACCT_OR_BILL_TO, ACCT_OR_BILL_TO_NAME, SHIP_TO, ST_NAME, BID_OR_PRCA, BID_OR_PRCA_NAME, LPG_ID, LPG_DESC, PRICE_SOURCE_PCCA, 
+  ADDRESS, ADDRSS_LINE1, ADDRSS_LINE2, ADDRSS_LINE3, ADDRSS_LINE4, CITY, STATE, ZIP,
+  ITEM_AS400_NUM, ITEM_E1_NUM, BL_QTY, CURR_QTY, CTLG_NUM, SELL_UOM, BUY_UOM, VENDOR_NUM, VENDOR_NAME, PRVT_BRND_FLG, ITEM_DSC, ITEM_PRODUCT_FAM_DSC,
+  BL_DATE, CURR_DATE,
+  MMR_TYPE, MMR_STATUS, BL_MFG_CONT_CHANGE, SIG_COST_INC, BL_REASON_CD, BL_EXPLANATION, CURR_CHANGE_SUMMARY, COST_STATUS, PRICE_STATUS, MARGIN_STATUS, MARGIN_PREC_STATUS, BL_CHANGE_SUMMARY, MMR_STATUS_REASON_CODE,
+  BL_COST, CURR_COST, BL_COMP_COST, CURR_COMP_COST, BL_PRICING_COST, CURR_PRICING_COST, BL_COST_CHANGE, CURR_COST_CHANGE, COST_IMPACT,
+  CURR_VAR_COST, VAR_CST_OPP, CURR_MIN_VAR_CST, MN_LPG_PRCA_COST, VRCST_MFG_CONT, VRCST_MCK_CONT, VAR_CST_CONT_NAME, VAR_CST_CONT_TYPE, PRCNT_CNCTD, ST_CNCTD, PCCA_CNCTD, VrCst_CONT_EXCLD, VRCST_CONT_ATR_ELIG_FLG, VRCST_CONT_TIER_BASE_FLG, VRCST_ORGN_SCR,
+  BL_SELL_PRICE, CURR_SELL_PRICE, BL_PRC_RULE, BL_PRC_SRC, BL_PRC_SRC_NAME,CURR_PRC_RULE, CURR_PRC_SRC, CURR_PRC_SRC_NAME, BL_PRICE_CHANGE, CURR_PRICE_CHANGE,  
+  BL_MARGIN, CURR_MARGIN, BL_MARGIN_PERC, CURR_MARGIN_PERC, ACTL_NEG_M, PROJ_NEG_M, ACTL_SLS, PROJ_SLS, ACTL_GP, PROJ_GP,
+  BL_MCK_CONT, BL_MFG_CONT, BL_MFG_CONT_NAME, BL_CONT_TYPE, CURR_MCK_CONT, CURR_MFG_CONT, CURR_MFG_CONT_NAME, CURR_CONT_TYPE, BL_CONT_ATR_ELIG_FLG, BL_CONT_TIER_BASE_FLG, CURR_CONT_ATR_ELIG_FLG, CURR_CONT_TIER_BASE_FLG, BL_ITEM_END_DT, BL_CNTRCT_END_DT, BL_CUST_ELIG_END_DT_MCK, CURR_ORGN_SCR,
+  BL_CUST_PRIM_GPO_NUM, BL_TRIG_CUST_PRIM_GPO_NUM, CURR_CUST_PRIM_GPO_NUM ,HIN ,DEA ,DEA_Exp_Date ,GPO_CoT ,GPO_CoT_Name ,Prmry_GPO_Flag ,Prmry_GPO_Num ,Prmry_GPO_Name ,Prmry_GPO_ID ,GPO_Mmbrshp_St ,Prmry_aff_St ,RX_GPO_Num  ,RX_GPO_Name ,RX_GPO_ID
+  ,MSTR_GRP_NUM, MSTR_GRP_NAME, ACCT_MGR_NAME, DECISION_MAKER,
+  LM_PERC_CAP, LM_OPP_MRGN_PERC, 
+  PNDG_MMR_OPP, RES_MMR_OPP, 
+  TEAM_ASSIGNED, POOL_NUM, MMR_CASE, INSRT_DT, CASE_CNTR, POOL_NAME) 
 
 --I GROUPED THE FIELDS TO REVEAL REDUNDANCY. I HOPE TO LOSE SOME OF THESE.
 SELECT  distinct --REGION 
@@ -804,18 +823,18 @@ SELECT  distinct --REGION
         IPC.CASE_CNTR,          PN.POOL_NAME 
 --END REGION
 FROM MRGN_EU.MMR_STATUS_FINAL M 
-join MRGN_EU.PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY
+join MRGN_EU.PAL_RPA_CASES CASES on M.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
 ----------------------------adding MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE,GPO NAME, PRIMARY GPO NAME LPG, PRCA, BID, and case assignments--------------------------------------------
-JOIN MRGN_EU.PAL_RPA_IPC IPC  ON M.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
+left JOIN MRGN_EU.PAL_RPA_IPC IPC  ON CASES.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
 ---------------------------------------------POOL NAME FOR FILENAME LOGIC-------------------------------------------
-left JOIN MRGN_EU.PAL_RPA_POOL_E1 PN ON PN.POOL_NUM = PAL_RPA_cases.POOL_NUM
-                                    AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
+left JOIN MRGN_EU.PAL_RPA_POOL PN ON PN.POOL_NUM = CASES.POOL_NUM
+                                 AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
 ----------------------------GPO, HIN, DEA, RX GPO, PRMRY GPO--------------------------------------------------------
 left join MRGN_EU.PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
-JOIN MRGN_EU.PAL_ATTRBT_FLGS AF ON M.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
+left JOIN MRGN_EU.PAL_ATTRBT_FLGS AF ON CASES.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
 -------------------------------------------------
-left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
+left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
 ---------------------------------------------var cost excld flag---------------------------------------------------------
 left join MRGN_EU.PAL_RPA_EXCL_FLG  E  ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
                                       AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
@@ -823,15 +842,16 @@ LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS ON ADDRESS.SYS_PLTFRM = M.SYS_PLTFRM
                                          AND ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
                                          AND ADDRESS.CUST_KEY = M.SHIP_TO
 ;
-
+/*
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e6582x6; --the STRAT bot
  GRANT SELECT ON MRGN_EU.PAL_RPA TO MFC_CTRT_ADMIN_BITEAM_AU; --api 
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e0w4quu;   --Vivek:
+ GRANT SELECT ON MRGN_EU.PAL_RPA TO e0wssh5;   --paul: */
 -- GRANT SELECT ON MRGN_EU.PAL_RPA TO edt731a;  -- Sharieff:
 --end region
                       
 --region DROP THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
-drop table PAL_RPA_POOL_E1;
+drop table PAL_RPA_POOL;
 drop table PAL_RPA_2g;
 drop table PAL_RPA_CASES;
 drop table PAL_RPA_IPC;
@@ -841,11 +861,18 @@ drop table PAL_ATTRBT_FLGS;
 DROP TABLE PAL_RPA_GPO_DEA_HIN; 
 DROP TABLE PAL_RPA_ADDRESS;COMMIT;--end region
 
+
+
+
 -----------------------------
 
 ----------NOTES--------------
 
 -----------------------------
+--REGION MODIFYING TABLE PROPERTIES
+ ALTER TABLE PAL_RPA
+MODIFY POOL_NAME VARCHAR2(50);--END REGION
+
   /* 10-21-2020 decided we only needed attribute flags these for the var_cost_contract, but I'm keeping them just incase
   
   CREATE TABLE PAL_ATTRBT_FLGS AS
