@@ -1,5 +1,18 @@
---HAH_IPC AND MMR_STATUS_FIN/AL WERE BOTH SWITCHED OUT FOR HAH_IPC_10_21 & PAL_MMR_STATUS_FINAL/
---CREATE TABLE HAH_IPC AS SELECT * FROM HAH_IPC;
+
+--REGION START THE TIMER
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT SYSDATE        AS START_,
+       SYSDATE        AS NOW, 
+       NULL           AS DURATION_STRING, 
+       'MMR, RPA'     AS APPLICATION_NAME, 
+       'RPA'          AS PROCESS_NAME, 
+       'TIMER'        AS PROCESS_TYPE, 
+       'START'        AS EVENT_ACTION, 
+       'START THE TIMER FOR THE INSERT STATEMENTS' AS ACTION_DESCRIPTION,
+       NULL AS METRIC_NAME, 
+       NULL AS METRIC_VALUE
+FROM DUAL; commit;--END REGION
 
 --region All ACCT_ITEM_KEY's and fitler columns, exlcuding lines from the exclusions table.
 Create table PAL_RPA_MMR_DATA as 
@@ -22,6 +35,7 @@ Create table PAL_RPA_MMR_DATA as
               WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test -- this is to help me figure out nicks exclusions
  from MMR_STATUS_FINAL M  
  --exlcuding my previously assigned lines
+ /*
      join (Select ACCT_ITEM_KEY from MMR_STATUS_FINAL
              MINUS 
             Select ACCT_ITEM_KEY from PAL_RPA
@@ -29,7 +43,7 @@ Create table PAL_RPA_MMR_DATA as
                                                    WHEN TEAM_ASSIGNED = 'STRAT' THEN 25  --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
                                                    WHEN TEAM_ASSIGNED = 'NM'    THEN 90
                                                 END
-            ) x on x.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY 
+            ) x on x.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY */
 ------exclude negative load lines
  WHERE (M.BL_MFG_CONT <>  'MCKB-NEG-LD' or M.BL_MFG_CONT is null) 
     --and SYS_PLTFRM = 'E1'  --GET BOTH E1 AND AS400 AND THEN DIVIDE.
@@ -61,7 +75,28 @@ Create table PAL_RPA_MMR_DATA as
                       FROM MRGN_EU.MMR_EXCLUSIONS mmr
                       ) EX
                     )     */   
-);--end region 
+);
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA_MMR_DATA)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA_MMR_DATA'             AS EVENT_ACTION, 
+             'All ACCT_ITEM_KEYs and fitler columns, without exclusions'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
+--end region 
 
 --region SEPERATE E1 AND AS400 DATA
 CREATE TABLE PAL_RPA_E1 AS    SELECT M.* FROM PAL_RPA_MMR_DATA M WHERE SYS_PLTFRM = 'E1';
@@ -71,9 +106,8 @@ CREATE TABLE PAL_RPA_AS400 AS SELECT M.*, G.POOL_NUM, G.POOL_NAME
                                                                WHERE SYS_PLTFRM = 'AS400'; --END REGION
                                                                
 --REGION GET POOL NUM AND NAME BY E1 BILL_TO. used in 2h, 3a and final table, changed name from PAL_RPA_POOL 1/19/21
-create table PAL_RPA_POOL AS
-SELECT* FROM (
-with sub1 as (SELECT DISTINCT a.ACCT_OR_BILL_TO, p.POOL_NUM, p.POOL_NAME, cp.CUST_POOL_START_DT, a.SYS_PLTFRM
+create table PAL_RPA_POOL AS SELECT* FROM (with 
+     sub1 as (SELECT DISTINCT a.ACCT_OR_BILL_TO, p.POOL_NUM, p.POOL_NAME, cp.CUST_POOL_START_DT, a.SYS_PLTFRM
                FROM       PAL_RPA_E1 a  --changed from mmr_status on 8/7/20
                      JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR cust ON a.ACCT_OR_BILL_TO = cust.BILL_TO_CUST_E1_NUM 
                      JOIN EDWRPT.V_DIM_CUST_POOL cp            ON cust.DIM_BILL_TO_CUST_CURR_ID = cp.DIM_CUST_CURR_ID
@@ -267,12 +301,33 @@ UNION
 SELECT * FROM PAL_RPA_3D
 UNION
 SELECT * FROM PAL_RPA_4B);--end region
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA_CASES)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA_CASES'             AS EVENT_ACTION, 
+             'COLLECT STRAT E1, STRAT AS400 AND NM CASES AND UNION ALL CASE GROUPS'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
 --END REGION
 
---region DROP PAL_RPA_MMR_DATA, PAL_RPA_E1, AND PAL_RPA_AS400
+--region DROP PAL_RPA_MMR_DATA, PAL_RPA_E1, PAL_RPA_AS400, and PAL_RPA_2g
 drop table PAL_RPA_MMR_DATA;
 drop table PAL_RPA_AS400;
-drop table PAL_RPA_E1; COMMIT;--end region
+drop table PAL_RPA_E1;
+drop table PAL_RPA_2g;COMMIT;--end region
 
 --REGION 6 IPC (15min)
 CREATE TABLE PAL_RPA_IPC AS 
@@ -327,6 +382,7 @@ SELECT * FROM (with A AS (select RPA.*,
 --END REGION
 --REGION 6D MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE                 
                   SUB1 AS (SELECT DISTINCT B.PRICE_SOURCE, B.COMP_COST_LIST_ID, B.PRC_SRC_ITEM_KEY_2 as PRC_SRC_ITEM_KEY_3,
+                                           B.GPO_NAME AS VRCST_GPO_NAME,
                                           CASE WHEN B.SYS_PLTFRM = 'AS400'                       THEN B.ITEM_AS400_NUM                                   ELSE TO_CHAR(B.ITEM_E1_NUM)  END AS ITEM,
                                           CASE WHEN B.SYS_PLTFRM = 'E1'                          THEN LEAST(B.COMP_COST_INITIAL, B.PRICING_COST_INITIAL) ELSE B.COMP_COST_INITIAL     END AS LPG_PRCA_Cost,
                                           CASE WHEN B.SYS_PLTFRM = 'E1'    
@@ -352,11 +408,12 @@ SELECT * FROM (with A AS (select RPA.*,
                                    sub1.VAR_CST_CONT, 
                                    sub1.VAR_CST_CONT_NAME, 
                                    sub1.VAR_CST_CONT_TYPE, 
+                                   sub1.VRCST_GPO_NAME,
                                    RANK() OVER (PARTITION BY sub1.PRICE_SOURCE, sub1.ITEM ORDER BY sub1.VAR_CST_CONT, sub1.VAR_CST_CONT_TYPE, sub1.COMP_COST_LIST_ID) as RNK --I ADDED THE COMP COST LIST ID TO REMOVE DUPLICATION
-                          FROM         sub1
+                          FROM          sub1
                           INNER JOIN    sub2 ON sub1.PRICE_SOURCE = sub2.PRICE_SOURCE 
-                                               AND sub1.ITEM = sub2.ITEM
-                                               AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost),
+                                            AND sub1.ITEM = sub2.ITEM
+                                            AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost),
                   D AS (SELECT * FROM SUB3 WHERE RNK = 1),--end region 
 --REGION 6E COMBINE THE CASE, IPC, and VAR COST DATA.
   E AS       (SELECT C.*,
@@ -433,12 +490,12 @@ GAP_PRCNT AS   (SELECT ROUND(sum(NO_GAP.CNT) / (sum(GAP.CNT)  + sum(NO_GAP.CNT))
 --END REGION      
 --region 6H COMBINE ALL PREVIOUS TABLES and select fields
 H AS (SELECT  E.SHIP_TO,  E.SYS_PLTFRM, E.BUS_PLTFRM, E.ACCT_OR_BILL_TO,
-              E.PRICE_SOURCE_PCCA ,E.BID_OR_PRCA ,E.BID_OR_PRCA_NAME,
-              E.GPO_NUMBER, E.GPO_NAME
+              E.PRICE_SOURCE_PCCA ,E.BID_OR_PRCA ,E.BID_OR_PRCA_NAME
               ,G.PRCNT_CNCTD      ,pcca_vc_flg.PCCA_CNCTD
               ,E.MN_LPG_PRCA_COST
               ,E.LPG_ID,            E.LPG_DESC,
               E.VAR_CST_CONT,       E.VAR_CST_CONT_NAME, E.VAR_CST_CONT_TYPE,  
+              E.VRCST_GPO_NAME,
               E.TEAM_ASSIGNED,      E.POOL_NUM,
               E.MMR_CASE,           E.INSRT_DT,
               E.CASE_CNTR,          E.ACCT_ITEM_KEY,
@@ -467,7 +524,28 @@ SELECT DISTINCT
 CREATE INDEX MRGN_EU.PAL_RPA_IPC_IND ON MRGN_EU.PAL_RPA_IPC
 (VrCst_CNTRCT_TIER_ID, DIM_CUST_CURR_ID, ACCT_ITEM_KEY)
 LOGGING
-NOPARALLEL;--END REGION
+NOPARALLEL;
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA_IPC)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'INDEX'                        AS PROCESS_TYPE, 
+             'PAL_RPA_IPC'                  AS EVENT_ACTION, 
+             'GET ALL THE IPC FIELDS YOU WILL NEED TO CALCULATE THE VAR COST INFORMATION'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
+--END REGION
                                     
 --REGION 7 ADD VAR COST CONTRACT EXCLUDED FLAG (15 min)
 create table PAL_RPA_EXCL_FLG AS 
@@ -491,7 +569,28 @@ SELECT * FROM(WITH D_IPC     AS (SELECT DISTINCT VrCst_CNTRCT_TIER_ID, DIM_CUST_
                      coalesce(E.VrCst_CONT_EXCLD, 'N') as VrCst_CONT_EXCLD
               FROM   D_IPC I
               JOIN EXCLD_FLG E ON E.DIM_CUST_CURR_ID = I.DIM_CUST_CURR_ID
-                              AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);--end region 
+                              AND E.VrCst_CNTRCT_TIER_ID = I.VrCst_CNTRCT_TIER_ID);
+                              
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA_IPC)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA_EXCL_FLG'             AS EVENT_ACTION, 
+             'ADD VAR COST CONTRACT EXCLUDED FLAG'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
+                              --end region 
                                    
 --region 8 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (10 mins)
 CREATE TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN AS
@@ -541,7 +640,28 @@ SUM (CASE WHEN GP_DOLLAR < 0 THEN
                WHEN TRANS_TYPE = 'AS400' THEN EXT_COGS_REP_MMS_AMT END
           ELSE NULL END) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS NEG_CST_3_MTH
 FROM MRGN_EU.MMR_DAILY_TXN
-WHERE SYS_PLTFRM = 'EC');--end region 
+WHERE SYS_PLTFRM = 'EC');
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA_WEEKLY_TXN)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA_WEEKLY_TXN'             AS EVENT_ACTION, 
+             'SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
+--end region 
 
 --region 9 CONTRACT ATTRIBUTE ADDITIONS 
 CREATE TABLE PAL_ATTRBT_FLGS AS
@@ -715,7 +835,18 @@ SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
        FROM ADDRESS);
 --end region
 
+--region 12 Class of trade
+CREATE TABLE PAL_RPA_COT AS ( SELECT * FROM (
+    WITH ACCOUNTS AS (SELECT M.SHIP_TO
+                      FROM MRGN_EU.PAL_RPA_CASES RPA  
+                      JOIN MRGN_EU.MMR_STATUS_FINAL M on RPA.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY)
+         select C.mms_sub_class_dsc AS COT, C.CUST_E1_NUM 
+                    from EDWRPT.V_DIM_CUST_E1_BLEND_CURR C
+                    JOIN ACCOUNTS ON C.CUST_E1_NUM = ACCOUNTS.SHIP_TO));
+--end region
+
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
+/*
  INSERT INTO PAL_RPA  
  (ACCT_ITEM_KEY, SYS_PLTFRM, BUS_PLTFRM, HIGHEST_CUST_NAME, ACCT_OR_BILL_TO, ACCT_OR_BILL_TO_NAME, SHIP_TO, ST_NAME, BID_OR_PRCA, BID_OR_PRCA_NAME, LPG_ID, LPG_DESC, PRICE_SOURCE_PCCA, 
   ADDRESS, ADDRSS_LINE1, ADDRSS_LINE2, ADDRSS_LINE3, ADDRSS_LINE4, CITY, STATE, ZIP,
@@ -723,16 +854,18 @@ SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
   BL_DATE, CURR_DATE,
   MMR_TYPE, MMR_STATUS, BL_MFG_CONT_CHANGE, SIG_COST_INC, BL_REASON_CD, BL_EXPLANATION, CURR_CHANGE_SUMMARY, COST_STATUS, PRICE_STATUS, MARGIN_STATUS, MARGIN_PREC_STATUS, BL_CHANGE_SUMMARY, MMR_STATUS_REASON_CODE,
   BL_COST, CURR_COST, BL_COMP_COST, CURR_COMP_COST, BL_PRICING_COST, CURR_PRICING_COST, BL_COST_CHANGE, CURR_COST_CHANGE, COST_IMPACT,
-  CURR_VAR_COST, VAR_CST_OPP, CURR_MIN_VAR_CST, MN_LPG_PRCA_COST, VRCST_MFG_CONT, VRCST_MCK_CONT, VAR_CST_CONT_NAME, VAR_CST_CONT_TYPE, PRCNT_CNCTD, ST_CNCTD, PCCA_CNCTD, VrCst_CONT_EXCLD, VRCST_CONT_ATR_ELIG_FLG, VRCST_CONT_TIER_BASE_FLG, VRCST_ORGN_SCR,
+  CURR_VAR_COST, VAR_CST_OPP, CURR_MIN_VAR_CST, MN_LPG_PRCA_COST, VRCST_MFG_CONT, VRCST_MCK_CONT, VAR_CST_CONT_NAME, VAR_CST_CONT_TYPE, PRCNT_CNCTD, ST_CNCTD, PCCA_CNCTD, VrCst_CONT_EXCLD, VRCST_CONT_ATR_ELIG_FLG, VRCST_CONT_TIER_BASE_FLG, VRCST_ORGN_SCR, VRCST_GPO_NAME,
   BL_SELL_PRICE, CURR_SELL_PRICE, BL_PRC_RULE, BL_PRC_SRC, BL_PRC_SRC_NAME,CURR_PRC_RULE, CURR_PRC_SRC, CURR_PRC_SRC_NAME, BL_PRICE_CHANGE, CURR_PRICE_CHANGE,  
   BL_MARGIN, CURR_MARGIN, BL_MARGIN_PERC, CURR_MARGIN_PERC, ACTL_NEG_M, PROJ_NEG_M, ACTL_SLS, PROJ_SLS, ACTL_GP, PROJ_GP,
   BL_MCK_CONT, BL_MFG_CONT, BL_MFG_CONT_NAME, BL_CONT_TYPE, CURR_MCK_CONT, CURR_MFG_CONT, CURR_MFG_CONT_NAME, CURR_CONT_TYPE, BL_CONT_ATR_ELIG_FLG, BL_CONT_TIER_BASE_FLG, CURR_CONT_ATR_ELIG_FLG, CURR_CONT_TIER_BASE_FLG, BL_ITEM_END_DT, BL_CNTRCT_END_DT, BL_CUST_ELIG_END_DT_MCK, CURR_ORGN_SCR,
-  BL_CUST_PRIM_GPO_NUM, BL_TRIG_CUST_PRIM_GPO_NUM, CURR_CUST_PRIM_GPO_NUM ,HIN ,DEA ,DEA_Exp_Date ,GPO_CoT ,GPO_CoT_Name ,Prmry_GPO_Flag ,Prmry_GPO_Num ,Prmry_GPO_Name ,Prmry_GPO_ID ,GPO_Mmbrshp_St ,Prmry_aff_St ,RX_GPO_Num  ,RX_GPO_Name ,RX_GPO_ID
+  BL_CUST_PRIM_GPO_NUM, CURR_CUST_PRIM_GPO_NUM, HIN ,DEA ,DEA_Exp_Date ,GPO_CoT ,GPO_CoT_Name ,Prmry_GPO_Flag ,Prmry_GPO_Num ,Prmry_GPO_Name ,Prmry_GPO_ID ,GPO_Mmbrshp_St ,Prmry_aff_St ,RX_GPO_Num  ,RX_GPO_Name ,RX_GPO_ID
   ,MSTR_GRP_NUM, MSTR_GRP_NAME, ACCT_MGR_NAME, DECISION_MAKER,
   LM_PERC_CAP, LM_OPP_MRGN_PERC, 
   PNDG_MMR_OPP, RES_MMR_OPP, 
-  TEAM_ASSIGNED, POOL_NUM, MMR_CASE, INSRT_DT, CASE_CNTR, POOL_NAME) 
-
+  TEAM_ASSIGNED, POOL_NUM, MMR_CASE, INSRT_DT, CASE_CNTR, POOL_NAME)
+*/  
+drop table pal_rpa;
+CREATE TABLE PAL_RPA AS 
 --I GROUPED THE FIELDS TO REVEAL REDUNDANCY. I HOPE TO LOSE SOME OF THESE.
 SELECT  distinct --REGION 
         -----------ACCT INFO-----------------
@@ -742,7 +875,7 @@ SELECT  distinct --REGION
         M.SHIP_TO,               M.ST_NAME, 
         IPC.BID_OR_PRCA,         IPC.BID_OR_PRCA_NAME,
         IPC.LPG_ID,              IPC.LPG_DESC,
-        IPC.PRICE_SOURCE_PCCA,
+        IPC.PRICE_SOURCE_PCCA,   COT.COT,
         -----------ADDRESS-------------------
         ADDRESS.ADDRESS, ADDRESS.ADDRSS_LINE1, ADDRESS.ADDRSS_LINE2, ADDRESS.ADDRSS_LINE3, ADDRESS.ADDRSS_LINE4, ADDRESS.CITY, ADDRESS.STATE, ADDRESS.ZIP,
         -----------ITEM----------- 
@@ -778,7 +911,7 @@ SELECT  distinct --REGION
              THEN 'Y' else 'N' end as ST_CNCTD,
         IPC.PCCA_CNCTD,          E.VrCst_CONT_EXCLD,
         VRCST_CONT_ATR_ELIG_FLG, VRCST_CONT_TIER_BASE_FLG,
-        VRCST_ORGN_SCR,
+        VRCST_ORGN_SCR,          VRCST_GPO_NAME,
         -----------PRICE-----------
         M.BL_SELL_PRICE,         CASE WHEN CURR_DATE = BL_DATE THEN M.BL_TRIG_SELL_PRICE   ELSE M.CURR_SELL_PRICE    END AS  CURR_SELL_PRICE,        
         M.BL_PRC_RULE,           CASE WHEN CURR_DATE = BL_DATE THEN M.BL_TRIG_PRC_RULE     ELSE M.CURR_PRC_RULE      END AS  CURR_PRC_RULE,              
@@ -800,11 +933,11 @@ SELECT  distinct --REGION
         CASE WHEN CURR_DATE = BL_DATE THEN M.BL_TRIG_CONT_TYPE      ELSE M.CURR_CONT_TYPE      END AS  CURR_CONT_TYPE,
         BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
         CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,
-        M.BL_ITEM_END_DT,        M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
+        M.BL_ITEM_END_DT,            M.BL_CNTRCT_END_DT,   M.BL_CUST_ELIG_END_DT_MCK, 
         CURR_ORGN_SCR,
         -----------GPO-----------
-        M.BL_CUST_PRIM_GPO_NUM,   M.BL_TRIG_CUST_PRIM_GPO_NUM, 
-        M.CURR_CUST_PRIM_GPO_NUM 
+        M.BL_CUST_PRIM_GPO_NUM,   
+        CASE WHEN CURR_DATE = BL_DATE THEN M.BL_TRIG_CUST_PRIM_GPO_NUM      ELSE M.CURR_CUST_PRIM_GPO_NUM      END AS  CURR_CUST_PRIM_GPO_NUM
         ,GPO.HIN              ,GPO.DEA            ,GPO.DEA_Exp_Date
         ,GPO.GPO_CoT          ,GPO.GPO_CoT_Name   --,GPO.MKT_SUB_CLS
         ,GPO.Prmry_GPO_Flag   ,GPO.Prmry_GPO_Num  ,GPO.Prmry_GPO_Name  ,GPO.Prmry_GPO_ID
@@ -823,270 +956,61 @@ SELECT  distinct --REGION
         IPC.CASE_CNTR,          PN.POOL_NAME 
 --END REGION
 FROM MRGN_EU.MMR_STATUS_FINAL M 
-join MRGN_EU.PAL_RPA_CASES CASES on M.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
+join MRGN_EU.PAL_RPA_CASES CASES          on M.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
+left join mrgn_eu.PAL_RPA_COT COT         on COT.CUST_E1_NUM = M.SHIP_TO
 ----------------------------adding MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE,GPO NAME, PRIMARY GPO NAME LPG, PRCA, BID, and case assignments--------------------------------------------
-left JOIN MRGN_EU.PAL_RPA_IPC IPC  ON CASES.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
+left JOIN MRGN_EU.PAL_RPA_IPC IPC         ON CASES.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
 ---------------------------------------------POOL NAME FOR FILENAME LOGIC-------------------------------------------
-left JOIN MRGN_EU.PAL_RPA_POOL PN ON PN.POOL_NUM = CASES.POOL_NUM
-                                 AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
+left JOIN MRGN_EU.PAL_RPA_POOL PN         ON PN.POOL_NUM = CASES.POOL_NUM
+                                         AND PN.ACCT_OR_BILL_TO = M.ACCT_OR_BILL_TO
 ----------------------------GPO, HIN, DEA, RX GPO, PRMRY GPO--------------------------------------------------------
 left join MRGN_EU.PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
-left JOIN MRGN_EU.PAL_ATTRBT_FLGS AF ON CASES.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
+left JOIN MRGN_EU.PAL_ATTRBT_FLGS AF      ON CASES.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
 -------------------------------------------------
-left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN ON TXN.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
+left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
 ---------------------------------------------var cost excld flag---------------------------------------------------------
-left join MRGN_EU.PAL_RPA_EXCL_FLG  E  ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
-                                      AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
+left join MRGN_EU.PAL_RPA_EXCL_FLG  E     ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
+                                         AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
 LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS ON ADDRESS.SYS_PLTFRM = M.SYS_PLTFRM   
                                          AND ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
                                          AND ADDRESS.CUST_KEY = M.SHIP_TO
 ;
-/*
+
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e6582x6; --the STRAT bot
  GRANT SELECT ON MRGN_EU.PAL_RPA TO MFC_CTRT_ADMIN_BITEAM_AU; --api 
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e0w4quu;   --Vivek:
- GRANT SELECT ON MRGN_EU.PAL_RPA TO e0wssh5;   --paul: */
+ GRANT SELECT ON MRGN_EU.PAL_RPA TO e0wssh5;   --paul: 
 -- GRANT SELECT ON MRGN_EU.PAL_RPA TO edt731a;  -- Sharieff:
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME),
+     CNT    AS (SELECT COUNT(*) CNT, 'RPA' AS PROCESS_NAME FROM PAL_RPA WHERE INSRT_DT = trunc(sysdate)) --THIS WORKS BECASE INSERT DATE IS CREATED THIS WAY.
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA'                      AS EVENT_ACTION, 
+             'FINAL TABLE'                  AS ACTION_DESCRIPTION,
+             'ROWS_INSERTED'                AS METRIC_NAME, 
+              CNT.CNT                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+JOIN CNT ON CNT.PROCESS_NAME = L.PROCESS_NAME); commit;-- end region
 --end region
-                      
+                     
 --region DROP THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
 drop table PAL_RPA_POOL;
-drop table PAL_RPA_2g;
 drop table PAL_RPA_CASES;
 drop table PAL_RPA_IPC;
 drop table PAL_RPA_EXCL_FLG;
 DROP TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN;
 drop table PAL_ATTRBT_FLGS; 
 DROP TABLE PAL_RPA_GPO_DEA_HIN; 
-DROP TABLE PAL_RPA_ADDRESS;COMMIT;--end region
-
------------------------------
-
-----------NOTES--------------
-
------------------------------
---REGION MODIFYING TABLE PROPERTIES
- ALTER TABLE PAL_RPA
-MODIFY POOL_NAME VARCHAR2(50);--END REGION
-
-  /* 10-21-2020 decided we only needed attribute flags these for the var_cost_contract, but I'm keeping them just incase
-  
-  CREATE TABLE PAL_ATTRBT_FLGS AS
-SELECT * FROM(
-WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID, 
-                      M.BL_TRIG_CNTRCT_TIER_ID, 
-                      M.CURR_CNTRCT_TIER_ID,
-                      M.ACCT_ITEM_KEY
-               FROM      MMR_STATUS_FINAL M 
-                    join PAL_RPA_CASES on M.ACCT_ITEM_KEY = PAL_RPA_cases.ACCT_ITEM_KEY),
-     CURR  AS (SELECT  CURR_CNTRCT_TIER_ID,
-                       ct.CNTRCT_SRC_CD AS CURR_ORGN_SCR,
-                       TIER_ATTRBT_ELGBLTY_FLG,
-                       TIER_BASE_FLG,
-                       ACCT_ITEM_KEY
-               FROM      ALL_3 a
-                join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.CURR_CNTRCT_TIER_ID),
-     BSLN  AS (SELECT  BL_CNTRCT_TIER_ID,
-                       TIER_ATTRBT_ELGBLTY_FLG,
-                       TIER_BASE_FLG,
-                       ACCT_ITEM_KEY
-               FROM      ALL_3 A
-                 join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = a.BL_CNTRCT_TIER_ID),
-     TRIG  AS (SELECT  BL_TRIG_CNTRCT_TIER_ID,
-                       TIER_ATTRBT_ELGBLTY_FLG,
-                       TIER_BASE_FLG,
-                       ACCT_ITEM_KEY
-               FROM      ALL_3 A
-                  join EDWRPT.V_DIM_CNTRCT_TIER ct on ct.DIM_CNTRCT_TIER_ID = A.BL_TRIG_CNTRCT_TIER_ID)
-                    
-SELECT DISTINCT 
-       CURR.TIER_ATTRBT_ELGBLTY_FLG  AS CURR_CONT_ATR_ELIG_FLG,
-       BSLN.TIER_ATTRBT_ELGBLTY_FLG  AS BL_CONT_ATR_ELIG_FLG,
-       TRIG.TIER_ATTRBT_ELGBLTY_FLG  AS TRIG_CONT_ATR_ELIG_FLG,
-       CURR.TIER_BASE_FLG            AS CURR_CONT_TIER_BASE_FLG,
-       BSLN.TIER_BASE_FLG            AS BL_CONT_TIER_BASE_FLG,
-       TRIG.TIER_BASE_FLG            AS TRIG_CONT_TIER_BASE_FLG,
-       CURR.CURR_ORGN_SCR,
-       ALL_3.ACCT_ITEM_KEY  
-FROM   ALL_3
-    LEFT JOIN BSLN ON ALL_3.ACCT_ITEM_KEY = BSLN.ACCT_ITEM_KEY and ALL_3.BL_CNTRCT_TIER_ID      = BSLN.BL_CNTRCT_TIER_ID
-    LEFT JOIN CURR ON ALL_3.ACCT_ITEM_KEY = CURR.ACCT_ITEM_KEY AND ALL_3.CURR_CNTRCT_TIER_ID    = CURR.CURR_CNTRCT_TIER_ID
-    LEFT JOIN TRIG ON ALL_3.ACCT_ITEM_KEY = TRIG.ACCT_ITEM_KEY AND ALL_3.BL_TRIG_CNTRCT_TIER_ID = TRIG.BL_TRIG_CNTRCT_TIER_ID
-    );
-    
-    
-  BL_CONT_ATR_ELIG_FLG,        BL_CONT_TIER_BASE_FLG,
-  TRIG_CONT_ATR_ELIG_FLG,      TRIG_CONT_TIER_BASE_FLG,
-  CURR_CONT_ATR_ELIG_FLG,      CURR_CONT_TIER_BASE_FLG,*/
-
-/*ON 8/12 I ADDED CASE STATEMENTS TO REMOVE TRIGGER HERE IS THE CODE BEFORE THEN
-M.ACCT_ITEM_KEY,         M.SYS_PLTFRM, --REGION
-        M.BUS_PLTFRM,            M.HIGHEST_CUST_NAME, 
-        M.ACCT_OR_BILL_TO,       M.ACCT_OR_BILL_TO_NAME, 
-        M.SHIP_TO,               M.ST_NAME, 
-        IPC.CURR_BID_OR_PRCA,    IPC.CURR_BID_OR_PRCA_NAME,
-        IPC.CURR_LPG_ID,         IPC.CURR_LPG_DESC,
-        -----------ITEM----------- 
-        M.ITEM_AS400_NUM,        M.ITEM_E1_NUM, 
-        M.BL_QTY,                
-        M.CURR_QTY,
-        M.CTLG_NUM,              M.SELL_UOM, 
-        M.BUY_UOM,               M.VENDOR_NUM, 
-        M.VENDOR_NAME,           M.PRVT_BRND_FLG,
-        M.ITEM_DSC,              M.ITEM_PRODUCT_FAM_DSC, 
-        -----------DATES-----------
-        M.BL_DATE,               M.CURR_DATE,
-        -----------NOTES-----------
-        M.MMR_TYPE,             M.MMR_STATUS, 
-        case when M.MMR_TYPE in ('CCI','CCI/LM') THEN 'CONTRACT -> ACQUISITION' 
-             ELSE  M.BL_MFG_CONT_CHANGE END AS BL_MFG_CONT_CHANGE, 
-        M.SIG_COST_INC,          M.BL_REASON_CD, 
-        M.BL_EXPLANATION,        M.CURR_CHANGE_SUMMARY,
-        M.COST_STATUS,           M.PRICE_STATUS, 
-        M.MARGIN_STATUS,         M.MARGIN_PREC_STATUS, 
-        M.BL_CHANGE_SUMMARY,     M.MMR_STATUS_REASON_CODE,
-        -----------COST----------- 
-        M.BL_COST,               M.BL_TRIG_COST,  M.CURR_COST,
-        M.BL_COMP_COST,          M.BL_TRIG_COMP_COST,        M.CURR_COMP_COST,        
-        M.BL_PRICING_COST,       M.BL_TRIG_PRICING_COST,  M.CURR_PRICING_COST,
-        M.BL_COST_CHANGE,        M.CURR_COST_CHANGE,
-        -----------VAR COST-----------
-        M.BL_VAR_COST,           M.BL_TRIG_VAR_COST, 
-        M.CURR_MIN_VAR_CST,      IPC.MN_LPG_PRCA_COST,
-        IPC.VAR_CST_CONT,        IPC.VAR_CST_CONT_NAME,
-        IPC.VAR_CST_CONT_TYPE,
-        -----------PRICE-----------
-        M.BL_SELL_PRICE,         M.BL_TRIG_SELL_PRICE, 
-        M.BL_PRICE_CHANGE,       M.BL_PRC_RULE, 
-        M.BL_FLCTN_PRC_RULE,     M.BL_TRIG_PRC_RULE, 
-        M.BL_PRC_SRC,            M.BL_PRC_SRC_NAME,
-        M.BL_TRIG_PRC_SRC,       M.BL_TRIG_PRC_SRC_NAME,
-        M.CURR_SELL_PRICE,       M.CURR_PRICE_CHANGE, 
-        M.CURR_PRC_RULE,         M.CURR_PRC_SRC, 
-        M.CURR_PRC_SRC_NAME, 
-        -----------MARGIN-----------
-        M.BL_MARGIN,             M.BL_TRIG_MARGIN, 
-        M.BL_MARGIN_PERC,        M.BL_TRIG_MARGIN_PERC,
-        M.CURR_MARGIN,           M.CURR_MARGIN_PERC,
-        CASE WHEN M.CURR_MARGIN >=0 THEN 0 ELSE  M.CURR_MARGIN * M.CURR_QTY * 4 END AS ANUAL_NM,
-        CASE WHEN M.CURR_MARGIN >=0 THEN 0 ELSE  M.CURR_MARGIN * M.CURR_QTY     END AS "3_MON_NM",
-        -----------CONTRACT-----------
-        M.BL_MFG_CONT,           M.BL_MFG_CONT_NAME, 
-        M.BL_CONT_TYPE,          M.BL_TRIG_MFG_CONT, 
-        M.BL_TRIG_MFG_CONT_NAME, M.BL_TRIG_CONT_TYPE, 
-        M.BL_MCK_CONT,           M.BL_TRIG_MCK_CONT,
-        M.BL_CNTRCT_END_DT,      M.BL_CUST_ELIG_END_DT_MCK, 
-        M.BL_ITEM_END_DT,        M.CURR_MFG_CONT, 
-        M.CURR_MFG_CONT_NAME,    M.CURR_CONT_TYPE, 
-        M.CURR_MCK_CONT,         --IPC.origin_source of contract
-        -----------GPO-----------
-        M.BL_CUST_PRIM_GPO_NUM,   M.BL_TRIG_CUST_PRIM_GPO_NUM, 
-        M.CURR_CUST_PRIM_GPO_NUM, IPC.GPO_NUMBER, 
-        IPC.CURR_GPO_NAME,
-        -----------REP-----------
-        M.MSTR_GRP_NUM,         M.MSTR_GRP_NAME,
-        M.ACCT_MGR_NAME,        M.DECISION_MAKER,
-        -----------LM-----------
-        M.LM_PERC_CAP,          M.LM_OPP_MRGN_PERC, 
-        -----------OPPURTUNITY-----------
-        M.PNDG_MMR_OPP,         M.RES_MMR_OPP, 
-        -----------ASSIGNMENT-----------
-        IPC.TEAM_ASSIGNED,        IPC.POOL_NUM,
-        IPC.MMR_CASE,             IPC.INSRT_DT,
-        IPC.CASE_CNTR,            PN.POOL_NAME */
-
-/* hISHAMS -MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE--------------------------------------------------------------------------------------------------------------------                        
---LEFT JOIN THIS on ( CASE WHEN mmr.CURR_PRC_SRC IS NULL THEN mmr.BL_TRIG_PRC_SRC ELSE mmr.CURR_PRC_SRC END || ',' || CASE WHEN SYS_PLTFRM = 'AS400' THEN mmr.ITEM_AS400_NUM ELSE TO_CHAR(mmr.ITEM_E1_NUM) END)
-CREATE TABLE PAL_RPA_VAR_CST_INFO AS     --region
-SELECT * 
-FROM (SELECT  (sub1.PRICE_SOURCE || ',' || sub1.ITEM) as PRC_SRC_ITEM_KEY,
-               sub2.Mn_LPG_PRCA_Cost, 
-               sub1.VAR_CST_CONT, 
-               sub1.VAR_CST_CONT_NAME, 
-               sub1.VAR_CST_CONT_TYPE, 
-               RANK() OVER (PARTITION BY sub1.PRICE_SOURCE, sub1.ITEM ORDER BY sub1.VAR_CST_CONT, sub1.VAR_CST_CONT_TYPE) as RNK
-        FROM (SELECT DISTINCT PRICE_SOURCE, ITEM_AS400_NUM, ITEM_E1_NUM,
-                              CASE WHEN SYS_PLTFRM = 'AS400' THEN ITEM_AS400_NUM                            ELSE TO_CHAR(ITEM_E1_NUM)   END AS ITEM,
-                              CASE WHEN SYS_PLTFRM = 'E1'    THEN LEAST(COMP_COST_INITIAL, PRICING_COST_INITIAL) ELSE COMP_COST_INITIAL END AS LPG_PRCA_Cost,
-                              CASE WHEN SYS_PLTFRM = 'E1'    
-                                   AND PRICING_COST_INITIAL < COMP_COST_INITIAL THEN PRICING_COST_CONT_ID   ELSE COMP_COST_CONT_ID      END AS VAR_CST_CONT,
-                              CASE WHEN SYS_PLTFRM = 'E1'    
-                                   AND PRICING_COST_INITIAL < COMP_COST_INITIAL THEN PRICING_COST_CONT_NAME ELSE COMP_COST_CONT_NAME    END AS VAR_CST_CONT_NAME,
-                              CASE WHEN SYS_PLTFRM = 'E1'    
-                                   AND PRICING_COST_INITIAL < COMP_COST_INITIAL THEN PRICING_COST_CONT_TYPE ELSE COMP_COST_CONT_TYPE    END AS VAR_CST_CONT_TYPE     
-               FROM PAL_RPA_IPC
-               WHERE VAR_COST = 'Y'
-              )sub1
-        INNER JOIN  (SELECT DISTINCT PRICE_SOURCE, 
-                                     CASE WHEN SYS_PLTFRM = 'AS400' THEN ITEM_AS400_NUM  ELSE TO_CHAR(ITEM_E1_NUM) 
-                                     END AS ITEM,
-                                     CASE WHEN SYS_PLTFRM = 'AS400' THEN MIN(COMP_COST_INITIAL) OVER (PARTITION BY PRICE_SOURCE, ITEM_AS400_NUM)  
-                                          WHEN SYS_PLTFRM = 'E1'    THEN MIN(LEAST(COMP_COST_INITIAL, PRICING_COST_INITIAL)) OVER (PARTITION BY PRICE_SOURCE, ITEM_E1_NUM) 
-                                     END AS Mn_LPG_PRCA_Cost
-                     FROM PAL_RPA_IPC
-                     WHERE VAR_COST = 'Y'
-                     )sub2 ON sub1.PRICE_SOURCE = sub2.PRICE_SOURCE 
-                           AND sub1.ITEM = sub2.ITEM
-                           AND sub1.LPG_PRCA_Cost = sub2.Mn_LPG_PRCA_Cost
-      )WHERE RNK = 1;--end region
-      */           
-
-/*     ---------------------------THIS TEST SHAVED 10 MINS OFF OF AN 11 MINUTE QUERY---------------------------------
-SELECT  M.ACCT_ITEM_KEY,
-        Y.BID_OR_PRCA,
-        Y.BID_OR_PRCA_NAME,
-        Y.LPG_ID,
-        Y.LPG_DESC,
-        X.TEAM_ASSIGNED, 
-        X.POOL_NUM,
-        to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||X.CASE_PREFIX||X.CASE_CNTR as MMR_CASE,
-        trunc(sysdate) as INSRT_DT
-FROM MMR_STATUS_FINAL M
-     join  (SELECT * FROM PAL_RPA_2h
-            UNION
-            SELECT * FROM PAL_RPA_3C
-            UNION
-            SELECT * FROM PAL_RPA_4B) X on M.ACCT_ITEM_KEY = X.ACCT_ITEM_KEY
--------THIS IS A BIG TIME CONSUMER. i THINK IT WOULD HELP TO GO TO SOURCE OR HAVE HISHIM DO IT FIRST.-------
-             --adding prc and lpg info
-     JOIN (SELECT CASE WHEN P.SYS_PLTFRM = 'E1' THEN P.SYS_PLTFRM||P.SHIP_TO||P.BUS_PLTFRM||P.ITEM_E1_NUM 
-                                     ELSE P.SYS_PLTFRM||P.ACCT_OR_BILL_TO||P.BUS_PLTFRM||P.ITEM_AS400_NUM
-                  END AS ACCT_ITEM_KEY2,
-                  P.BID_OR_PRCA,
-                  P.BID_OR_PRCA_NAME,
-                  P.LOCAL_PRICING_GROUP_ID LPG_ID,
-                  P.LPG_DESC
-           FROM HAH_IPC P) Y ON M.ACCT_ITEM_KEY = Y.ACCT_ITEM_KEY2--end region
- MINUS 
-            
-SELECT  M.ACCT_ITEM_KEY,
-        Y.BID_OR_PRCA,
-        Y.BID_OR_PRCA_NAME,
-        Y.LPG_ID,
-        Y.LPG_DESC, 
-        Y.TEAM_ASSIGNED, 
-        Y.POOL_NUM,
-        Y.MMR_CASE,
-        Y.INSRT_DT
-FROM MMR_STATUS_FINAL M
-             --adding prc and lpg info       
-     JOIN (SELECT X.ACCT_ITEM_KEY,
-                  X.TEAM_ASSIGNED, 
-                  X.POOL_NUM,
-                  to_char(sysdate, 'YY')||to_char(sysdate, 'MM')||to_char(sysdate, 'DD')||X.CASE_PREFIX||X.CASE_CNTR as MMR_CASE,
-                  trunc(sysdate) as INSRT_DT,
-                  P.BID_OR_PRCA,
-                  P.BID_OR_PRCA_NAME,
-                  P.LOCAL_PRICING_GROUP_ID LPG_ID,
-                  P.LPG_DESC
-           FROM HAH_IPC P
-                JOIN   (SELECT * FROM PAL_RPA_2h
-                        UNION
-                        SELECT * FROM PAL_RPA_3C
-                        UNION
-                        SELECT * FROM PAL_RPA_4B) X on X.ACCT_ITEM_KEY = (CASE WHEN P.SYS_PLTFRM = 'E1' THEN P.SYS_PLTFRM||P.SHIP_TO||P.BUS_PLTFRM||P.ITEM_E1_NUM 
-                                                                                    ELSE P.SYS_PLTFRM||P.ACCT_OR_BILL_TO||P.BUS_PLTFRM||P.ITEM_AS400_NUM END
-                                                                               )
-          ) Y ON M.ACCT_ITEM_KEY = Y.ACCT_ITEM_KEY;*/
-
+DROP TABLE PAL_RPA_ADDRESS;
+DROP TABLE PAL_RPA_COT;COMMIT;--end region
