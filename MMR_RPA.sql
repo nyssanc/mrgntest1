@@ -35,7 +35,8 @@ insert into pal_rpa_mmr_data
         CASE  WHEN M.SYS_PLTFRM = 'AS400'  THEN (M.ACCT_OR_BILL_TO || M.SYS_PLTFRM || M.ITEM_AS400_NUM || '-' || M.BL_DATE)
               WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test -- this is to help me figure out nicks exclusions
  from MMR_STATUS_FINAL M  
- WHERE 
+ WHERE M.PNDG_MMR_OPP > 0
+ AND
       --exlcuding my previously assigned lines
       M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY from PAL_RPA
                               where INSRT_DT > trunc(sysdate) - case when TEAM_ASSIGNED = 'CCT'   THEN 90
@@ -102,18 +103,19 @@ INSERT INTO PAL_RPA_AS400 (ACCT_ITEM_KEY,BL_MFG_CONT,CURR_MFG_CONT,ITEM_E1_NUM,C
 SELECT M.*, G.POOL_NUM, G.POOL_NAME FROM PAL_RPA_MMR_DATA M    
                                     JOIN MRGN_EU.SJF_STRAT_ACCT_ASSGNMNTS G   ON G.POOL_NUM = M.MSTR_GRP_NUM
 WHERE SYS_PLTFRM = 'AS400'
-and ("ACTV_FLG" IS NULL OR "ACTV_FLG" <> 'Y'); --END REGION       
+and ("ACTV_FLG" IS NULL OR "ACTV_FLG" <> 'Y'); commit;--END REGION       
                                                                
 --REGION 3 GET POOL NUM AND NAME BY E1 BILL_TO. used in 2h, 3a and final table, changed name from PAL_RPA_POOL 1/19/21
 INSERT INTO PAL_RPA_POOL (ACCT_OR_BILL_TO,SYS_PLTFRM,POOL_NUM,POOL_NAME)
 SELECT* FROM (with 
      sub1 as (SELECT DISTINCT a.ACCT_OR_BILL_TO, p.POOL_NUM, p.POOL_NAME, cp.CUST_POOL_START_DT, a.SYS_PLTFRM
-               FROM       PAL_RPA_E1 a  --changed from mmr_status on 8/7/20
+               FROM       MRGN_EU.MMR_STATUS_FINAL a  --changed from mmr_status on 8/7/20
                      JOIN EDWRPT.V_DIM_CUST_E1_BLEND_CURR cust ON a.ACCT_OR_BILL_TO = cust.BILL_TO_CUST_E1_NUM 
                      JOIN EDWRPT.V_DIM_CUST_POOL cp            ON cust.DIM_BILL_TO_CUST_CURR_ID = cp.DIM_CUST_CURR_ID
                      JOIN EDWRPT.V_DIM_POOL p                  ON cp.DIM_POOL_ID = p.DIM_POOL_ID
                WHERE     cp.CUST_POOL_END_DT  > SYSDATE
                      AND p.POOL_TYPE_NUM      IN ('3','4','5','6','7')
+                     and a.SYS_PLTFRM = 'E1'
                ),
      sub2 as (SELECT sub1.*, RANK() OVER (PARTITION BY sub1.ACCT_OR_BILL_TO ORDER BY sub1.CUST_POOL_START_DT DESC) as POOL_DT_RNK
               FROM  sub1
@@ -155,7 +157,7 @@ PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                GROUP BY BL_MFG_CONT, BUS_PLTFRM
                HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 50000
                                                WHEN BUS_PLTFRM = 'EC' THEN 20000 end)), --end region
---region 2C: TOP 70 EntContByOpp$
+--region 2C: TOP 20 EntContByOpp$
 PAL_RPA_2c as (SELECT SUM_OPP, 
                       BL_MFG_CONT,
                       BUS_PLTFRM, --grouping by bus pltform was creating duplicate values so I need to join on it
@@ -165,8 +167,8 @@ PAL_RPA_2c as (SELECT SUM_OPP,
                             ,BUS_PLTFRM--grouping by bus pltform was creating duplicate values so I need to join on it
                      from PAL_RPA_2b
                      ORDER BY SUM_OPP DESC
-                     FETCH FIRST 70 ROWS ONLY)), --end region
---region 2D Top 70 Enterprise Cont Issues By Opp$, one of the tables to union
+                     FETCH FIRST 20 ROWS ONLY)), --end region
+--region 2D Top 20 Enterprise Cont Issues By Opp$, one of the tables to union
 PAL_RPA_2d as (Select A.ACCT_ITEM_KEY, 
                      '1' as case_prefix,
                      CASE_CNTR,
@@ -193,16 +195,16 @@ PAL_RPA_2f_1 as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                  HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 20000
                                                  WHEN BUS_PLTFRM = 'EC' THEN 10000 end)
                 ), --end region
---region 2F_2 TOP 30 Item increases by sumOpp$
+--region 2F_2 TOP 10 Item increases by sumOpp$
 PAL_RPA_2f_2 as (SELECT SUM_OPP, 
                         ITEM_E1_NUM,
-                        ROWNUM+70 AS CASE_CNTR  --I WANT CASES 71-100 TO BE ITEM SO THAT'S WHERE ROW NUM WILL START.
+                        ROWNUM+10 AS CASE_CNTR  --I WANT CASES 71-100 TO BE ITEM SO THAT'S WHERE ROW NUM WILL START.
                  FROM (SELECT SUM_OPP, 
                               ITEM_E1_NUM
                        from PAL_RPA_2f_1
                        ORDER BY SUM_OPP DESC
-                       FETCH FIRST 30 ROWS ONLY)), --end region
---region 2F  Top 30 Item increase issue cases, one of the tables to union
+                       FETCH FIRST 10 ROWS ONLY)), --end region
+--region 2F  Top 10 Item increase issue cases, one of the tables to union
 PAL_RPA_2f as (Select E.ACCT_ITEM_KEY, 
                      '2' as case_prefix,
                      CASE_CNTR,
@@ -338,25 +340,26 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                            'STRAT' as Team_Assigned,
                            D.MSTR_GRP_NUM AS POOL_NUM
                     FROM PAL_RPA_AS400 D), --END REGION              
---REGION 4A NM SIDE TOP 100 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
-   PAL_RPA_4a AS (SELECT SUM_OPP,
+--REGION 4A NM SIDE TOP 10 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
+   PAL_RPA_4a AS (SELECT NEG_SLS_3_MTH,
                          HIGHEST_CUST_NAME,
                          VENDOR_NAME,
                          ROWNUM AS CASE_CNTR
-                  FROM (SELECT SUM_OPP,
+                  FROM (SELECT NEG_SLS_3_MTH,
                                B.HIGHEST_CUST_NAME,
                                B.VENDOR_NAME
                         FROM   (SELECT B.HIGHEST_CUST_NAME||B.VENDOR_NAME CUST_VEND,
                                       B.HIGHEST_CUST_NAME,
                                       B.VENDOR_NAME,
-                                      SUM(B.PNDG_MMR_OPP) SUM_OPP
+                                      SUM(W.NEG_SLS_3_MTH) NEG_SLS_3_MTH
                                 FROM PAL_RPA_3B B
+                                JOIN PAL_RPA_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
                               WHERE B.POOL_NUM IS NULL
-                                    AND B.PNDG_MMR_OPP > 0
-                                    --AND B. SYSTEM PLATFORM FILTER HERE
-                              group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME) B
-                              ORDER BY SUM_OPP DESC
-                              FETCH FIRST 100 ROWS ONLY
+                                    AND W.NEG_SLS_3_MTH > 0
+                              group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
+                               ) B
+                              ORDER BY NEG_SLS_3_MTH DESC
+                              FETCH FIRST 10 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
                         )
                    ),--END REGION
 --REGION 4B NM CASE LINES ONE OF THE CASE GROUPS
@@ -594,8 +597,7 @@ SELECT DISTINCT
       LEFT JOIN EDWRPT.V_DIM_CUST_CURR c    ON H.SHIP_TO     = c.CUST_E1_NUM
                                            AND H.BUS_PLTFRM  = C.BUS_PLTFRM
                                            AND H.SYS_PLTFRM  = C.SYS_PLTFRM);                                           --END REGION       
---END REGION                                          
-
+   --end region                                        
 --REGION INDEX AND DISTINCT IPC
 /*ONCE A TABLE IS INDEXED, YOU DON'T NEED TO RE-INDEX UNTIL DROPPED
 CREATE INDEX MRGN_EU.PAL_RPA_IPC_IND ON MRGN_EU.PAL_RPA_IPC
@@ -685,10 +687,9 @@ WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PA
 FROM PAL_EVENT_LOG L
 join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
              AND S.PREV_TIME = L.NOW); commit;-- end region
---end region 
 
 --region 9 CONTRACT ATTRIBUTE ADDITIONS 
-CREATE TABLE PAL_ATTRBT_FLGS AS
+INSERT INTO PAL_ATTRBT_FLGS (BL_CONT_ATR_ELIG_FLG,	BL_CONT_TIER_BASE_FLG,	BL_MCK_CONT,	CURR_CONT_ATR_ELIG_FLG,	CURR_CONT_TIER_BASE_FLG,	CURR_MCK_CONT,	VRCST_CONT_ATR_ELIG_FLG,	VRCST_CONT_TIER_BASE_FLG,	VRCST_MCK_CONT,	VRCST_MFG_CONT,	CURR_ORGN_SCR,	VRCST_ORGN_SCR,	ACCT_ITEM_KEY)
 SELECT * FROM(
 WITH ALL_3 AS (SELECT M.BL_CNTRCT_TIER_ID, 
                       CASE WHEN CURR_DATE = BL_DATE THEN M.BL_TRIG_CNTRCT_TIER_ID ELSE M.CURR_CNTRCT_TIER_ID END AS  CURR_CNTRCT_TIER_ID,
@@ -741,7 +742,6 @@ FROM   ALL_3
     LEFT JOIN VRCST ON ALL_3.ACCT_ITEM_KEY = VRCST.ACCT_ITEM_KEY AND ALL_3.VRCST_CNTRCT_TIER_ID = VRCST.VRCST_CNTRCT_TIER_ID
     );--END REGION
   
-
 --REGION 10 GPO, HIN, DEA, RX INFO
 insert into PAL_RPA_GPO_DEA_HIN (SHIP_TO,	HIN,	DEA,	DEA_EXP_DATE,	GPO_COT,	GPO_COT_NAME,	PRMRY_GPO_FLAG,	PRMRY_GPO_NUM,	PRMRY_GPO_NAME,	PRMRY_GPO_ID,	GPO_MMBRSHP_ST,	PRMRY_AFF_ST,	RX_GPO_NUM,	RX_GPO_NAME,	RX_GPO_ID)
 SELECT * FROM (
@@ -862,15 +862,15 @@ SELECT SYS_PLTFRM, BUS_PLTFRM, CUST_KEY,
 --end region
 
 --region 12 Class of trade
-CREATE TABLE PAL_RPA_COT AS ( SELECT * FROM (
+INSERT INTO PAL_RPA_COT (COT, CUST_E1_NUM)
+SELECT * FROM (
     WITH ACCOUNTS AS (SELECT M.SHIP_TO, M.ACCT_ITEM_KEY
                       FROM MRGN_EU.PAL_RPA_CASES RPA  
                       JOIN MRGN_EU.MMR_STATUS_FINAL M on RPA.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY)
          select C.mms_sub_class_dsc AS COT, C.CUST_E1_NUM 
                     from EDWRPT.V_DIM_CUST_E1_BLEND_CURR C
-                    JOIN ACCOUNTS ON C.CUST_E1_NUM = ACCOUNTS.SHIP_TO));
+                    JOIN ACCOUNTS ON C.CUST_E1_NUM = ACCOUNTS.SHIP_TO);
 --end region
-
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
 truncate table pal_rpa;
  INSERT INTO PAL_RPA
