@@ -36,44 +36,19 @@ insert into pal_rpa_mmr_data
               WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test -- this is to help me figure out nicks exclusions
  from MMR_STATUS_FINAL M  
  WHERE M.PNDG_MMR_OPP > 0
- AND
-      --exlcuding my previously assigned lines
-      M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY from PAL_RPA
-                              where INSRT_DT > trunc(sysdate) - case when TEAM_ASSIGNED = 'CCT'   THEN 90
+--exlcuding my previously assigned lines
+ AND  M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY from PAL_RPA
+                              where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 90
                                                                      WHEN TEAM_ASSIGNED = 'STRAT' THEN 25  --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
                                                                      WHEN TEAM_ASSIGNED = 'NM'    THEN 90
-                                                                  END
+                                                                END
                               )
-      ------exclude negative load lines 
+--exclude negative load lines 
   and (M.BL_MFG_CONT <>  'MCKB-NEG-LD' or M.BL_MFG_CONT is null) 
-/*exclusions not working as of 9/24/20   
-------excluding the exclusions table
-    AND         CASE  WHEN M.SYS_PLTFRM = 'AS400'  THEN (M.ACCT_OR_BILL_TO || M.SYS_PLTFRM || M.ITEM_AS400_NUM || '-' || M.BL_DATE)
-                      WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE)
-                   END 
-        NOT IN
-            (SELECT CASE  WHEN EX."System Platform" = 'AS400'   THEN (EX."Account or Bill To" || EX."System Platform" || EX."Item Number (AS400)" || '-' || EX.BL_DAY || '-' || EX.BL_MON || '-' || EX.BL_YR)
-                          WHEN EX."System Platform" = 'E1'      THEN (EX."Ship To" || EX."System Platform" || EX."Item Number (E1)" || '-' || EX.BL_DAY || '-' || EX.BL_MON || '-' || EX.BL_YR)
-                   END EXCLUSION_KEY
-             FROM  (SELECT DISTINCT   mmr."System Platform",
-                                      mmr."Account or Bill To",
-                                      mmr."Item Number (AS400)",
-                                      mmr."Item Number (E1)",
-                                      mmr."Ship To",
-                                      SUBSTR(mmr."Baseline Date",1,9) as test,
-                                      SUBSTR(mmr."Baseline Date",1,2) AS BL_DAY,
-                                      SUBSTR(mmr."Baseline Date",4,3) AS BL_MON,
-                                      SUBSTR(mmr."Baseline Date",8,2) AS BL_YR
---                                      CASE  WHEN SUBSTR(mmr."Baseline Date",4,3) = 01 THEN 'JAN'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 02 THEN 'FEB'
---                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 03 THEN 'MAR'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 04 THEN 'APR'
---                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 05 THEN 'MAY'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 06 THEN 'JUN'
---                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 07 THEN 'JUL'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 08 THEN 'AUG'
---                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 09 THEN 'SEP'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 10 THEN 'OCT'
---                                            WHEN SUBSTR(mmr."Baseline Date",4,3) = 11 THEN 'NOV'   WHEN SUBSTR(mmr."Baseline Date",4,3) = 12 THEN 'DEC'
---                                      END AS BL_MON,
-                      FROM MRGN_EU.MMR_EXCLUSIONS mmr
-                      ) EX
-                    )     */   
+--excluding the exclusions table
+AND TO_CHAR(M.SHIP_TO)||TO_CHAR(M.ITEM_E1_NUM) NOT IN (SELECT DISTINCT   TO_CHAR(ex."Ship To")||TO_CHAR(ex."Item Number (E1)") AS ID
+                                                       FROM MRGN_EU.MMR_EXCLUSIONS EX WHERE EX."Ship To" <> -1 
+                                                       )   
 );
 
 --REGION log insert
@@ -447,36 +422,20 @@ SELECT * FROM (with CASES AS (select  RPA.*,
                                 COMP_COST_INITIAL,                       PRICING_COST_INITIAL,
                                 PRICING_COST_LIST_ID,                    COMP_COST_LIST_ID,                                                                           
                                 VAR_COST,
+                                CASE WHEN PRICING_COST_INITIAL < COMP_COST_INITIAL 
+                                     THEN PRICING_COST_LIST_ID  
+                                     ELSE COMP_COST_LIST_ID end AS VRCST_CONT_FILTER, -- THIS HELPS ME REMOVE * CONTRACTS FROM THE MIN CONTRACT CALC
                                 SYS_PLTFRM||SHIP_TO||BUS_PLTFRM||ITEM_E1_NUM AS ACCT_ITEM_KEY --NEEDED TO JOIN TO THE CASE INFORMATION     
                          FROM MRGN_EU.HAH_IPC),--END REGION
---REGION 6C COMBINE THE CASE DATA WITH THE IPC DATA REDUCING IPC DATASET TO WHAT IS IN THE CASES
-/*              THIS WILL BENEFIT EACH OF THE FOLLOWING TABLE JOINS. 
-  YOU MAY WANT THIS TO BE A LEFT JOIN IN THE FUTURE if you are losing case data */
-                   IPC_REDUCED AS (SELECT  CASES.CASE_PREFIX,
-                                           CASES.CASE_CNTR,
-                                           CASES.TEAM_ASSIGNED,
-                                           CASES.POOL_NUM,
-                                           CASES.MMR_CASE,
-                                           CASES.INSRT_DT,
-                                           IPC.* 
-                                    FROM       CASES
-                                        JOIN   ipc on CASES.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY),--end region
---region 6D GET THE VARIABLE COST CONTRACT
---REGION add a filter to remove var cost contracts = *, or 0 from consideration
-                   IPC_A      AS (SELECT IPC_REDUCED.*,
-                                            CASE WHEN PRICING_COST_INITIAL < COMP_COST_INITIAL 
-                                                 THEN PRICING_COST_LIST_ID  
-                                                 ELSE COMP_COST_LIST_ID end AS VRCST_CONT_FILTER -- THIS HELPS ME REMOVE * CONTRACTS FROM THE MIN CONTRACT CALC
-                                     FROM IPC_REDUCED),--end region
---region filter down to var cost lines where the var cost contract does not equal 0 or *                                 
+--region 6D GET THE VARIABLE COST CONTRACT                                
                   IPC_B AS (SELECT DISTINCT  A.PRICE_SOURCE, 
-                                                --I removed these because I want the min of Pricing or costing contract. these fields give me two lines where those are different.
-                                                A.ITEM,
-                                                LEAST(A.COMP_COST_INITIAL, A.PRICING_COST_INITIAL)                   AS LPG_PRCA_Cost,
-                                                CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_LIST_ID    ELSE A.COMP_COST_LIST_ID       END AS VAR_CST_CONT,
-                                                CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_CONT_NAME  ELSE A.COMP_COST_CONT_NAME     END AS VAR_CST_CONT_NAME,
-                                                CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_CONT_TYPE  ELSE A.COMP_COST_CONT_TYPE     END AS VAR_CST_CONT_TYPE
-                                 FROM  IPC_A A --I NEED ALL THE OPTIONS FOR THE IPC, NOT JUST THE COSTS ON THE MMR. 
+                                                --I removed cost and price Id's because I want the min of Pricing or costing contract. these fields give me two lines where those are different.
+                                              A.ITEM,
+                                              LEAST(A.COMP_COST_INITIAL, A.PRICING_COST_INITIAL)                   AS LPG_PRCA_Cost,
+                                              CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_LIST_ID    ELSE A.COMP_COST_LIST_ID       END AS VAR_CST_CONT,
+                                              CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_CONT_NAME  ELSE A.COMP_COST_CONT_NAME     END AS VAR_CST_CONT_NAME,
+                                              CASE WHEN A.PRICING_COST_INITIAL < A.COMP_COST_INITIAL THEN A.PRICING_COST_CONT_TYPE  ELSE A.COMP_COST_CONT_TYPE     END AS VAR_CST_CONT_TYPE
+                                 FROM  IPC A --I NEED ALL THE OPTIONS FOR THE IPC, NOT JUST THE COSTS ON THE MMR. 
                                   JOIN CASES ON CASES.PRICE_SOURCE = A.PRICE_SOURCE
                                             AND CASES.ITEM         = A.ITEM
                                  WHERE A.VAR_COST = 'Y'
@@ -486,9 +445,9 @@ SELECT * FROM (with CASES AS (select  RPA.*,
                                 ),--end region
 --region get the min cost of the lowest of the cost or price over the price source item group                                
                   IPC_C AS (SELECT DISTINCT a.PRICE_SOURCE, 
-                                               a.ITEM,
-                                               MIN(LEAST(a.COMP_COST_INITIAL, a.PRICING_COST_INITIAL)) AS Mn_LPG_PRCA_Cost
-                           FROM IPC_A a --Table b and c need to independently come from the same source or I will get one min cost for the cost Contract and one min for the price contract where they are different. 
+                                            a.ITEM,
+                                            MIN(LEAST(a.COMP_COST_INITIAL, a.PRICING_COST_INITIAL)) AS Mn_LPG_PRCA_Cost
+                           FROM IPC a --Table b and c need to independently come from the same source or I will get one min cost for the cost Contract and one min for the price contract where they are different. 
                             JOIN CASES ON CASES.PRICE_SOURCE = A.PRICE_SOURCE -- only the price source items on the MMR
                                       AND CASES.ITEM = A.ITEM 
                                  WHERE a.VAR_COST = 'Y'
@@ -506,22 +465,28 @@ SELECT * FROM (with CASES AS (select  RPA.*,
                                  B.VAR_CST_CONT_TYPE, 
                                  RANK() OVER (PARTITION BY B.PRICE_SOURCE, B.ITEM ORDER BY B.VAR_CST_CONT, B.VAR_CST_CONT_TYPE, B.VAR_CST_CONT_NAME) as RNK --I ADDED THE COMP COST LIST ID TO REMOVE DUPLICATION
                           FROM        IPC_B B
-                          INNER JOIN  IPC_C C ON  B.PRICE_SOURCE     = C.PRICE_SOURCE 
-                                                 AND B.ITEM          = C.ITEM
-                                                 AND B.LPG_PRCA_Cost = C.Mn_LPG_PRCA_Cost),
+                          INNER JOIN  IPC_C C ON B.PRICE_SOURCE     = C.PRICE_SOURCE 
+                                             AND B.ITEM          = C.ITEM
+                                             AND B.LPG_PRCA_Cost = C.Mn_LPG_PRCA_Cost),
                   D_2 AS (SELECT * FROM D_1 WHERE RNK = 1),--END REGION    
---end region
 --REGION 6E COMBINE THE CASE, IPC, and VAR COST DATA.
-                  E AS  (SELECT C.*,
+                  E AS  (SELECT CASES.CASE_PREFIX,
+                                CASES.CASE_CNTR,
+                                CASES.TEAM_ASSIGNED,
+                                CASES.POOL_NUM,
+                                CASES.MMR_CASE,
+                                CASES.INSRT_DT,
+                                IPC.*, 
                                 D.Mn_LPG_PRCA_Cost,
                                 D.VAR_CST_CONT, 
                                 D.VAR_CST_CONT_NAME, 
                                 D.VAR_CST_CONT_TYPE, 
                                 TO_NUMBER(NVL(SUBSTR(D.VAR_CST_CONT,0,(INSTR (D.VAR_CST_CONT, '-', -1)) - 1),0))  AS Var_MCK_CONT_ID,
                                 TO_NUMBER(NVL(TRIM(REGEXP_SUBSTR(D.VAR_CST_CONT,'[^-]+$')),0))                    AS Var_MCK_CONT_TIER                                  
-                         FROM  IPC_REDUCED C
-                         left JOIN D_2 D ON C.PRICE_SOURCE = D.PRICE_SOURCE -- VAR COST INFO
-                                        AND C.ITEM = D.ITEM
+                         FROM  IPC 
+                         join  cases on CASES.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
+                         left JOIN D_2 D ON ipC.PRICE_SOURCE = D.PRICE_SOURCE -- VAR COST INFO
+                                        AND ipC.ITEM = D.ITEM
                          ),--END REGION                 
 --region 6F PCCA_VC_FLAG
 /*NOTES
@@ -995,8 +960,7 @@ left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
 ---------------------------------------------var cost excld flag---------------------------------------------------------
 left join MRGN_EU.PAL_RPA_EXCL_FLG  E     ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
                                          AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
-LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS ON ADDRESS.SYS_PLTFRM = M.SYS_PLTFRM   
-                                         AND ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
+LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS on ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
                                          AND ADDRESS.CUST_KEY   = M.SHIP_TO
 ; commit;
 
