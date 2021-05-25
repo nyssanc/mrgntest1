@@ -374,7 +374,8 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                                       B.VENDOR_NAME,
                                       SUM(W.NEG_SLS_3_MTH) NEG_SLS_3_MTH
                                 FROM PAL_RPA_3B B
-                                JOIN MRGN_EU.MMR_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
+                                JOIN MRGN_EU.PAL_RPA_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
+
                               WHERE B.POOL_NUM IS NULL
                                     AND W.NEG_SLS_3_MTH > 0
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
