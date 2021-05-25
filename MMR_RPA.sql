@@ -35,14 +35,16 @@ insert into pal_rpa_mmr_data
         CASE  WHEN M.SYS_PLTFRM = 'AS400'  THEN (M.ACCT_OR_BILL_TO || M.SYS_PLTFRM || M.ITEM_AS400_NUM || '-' || M.BL_DATE)
               WHEN M.SYS_PLTFRM = 'E1'     THEN (M.SHIP_TO || M.SYS_PLTFRM || M.ITEM_E1_NUM || '-' || M.BL_DATE) end as test -- this is to help me figure out nicks exclusions
  from MMR_STATUS_FINAL M  
+ --exlcuding my previously assigned lines for NM and CCT, they get weekly assignments so it's enough to not reassign a line to a case for 3 months. 
+--Strat lines are excluded from re-assignment here, but I also exclude Strat acct's in region 6 PAL_RPA_CASES
  WHERE M.PNDG_MMR_OPP > 0
---exlcuding my previously assigned lines
- AND  M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY from PAL_RPA
-                              where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 90
-                                                                     WHEN TEAM_ASSIGNED = 'STRAT' THEN 25  --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
-                                                                     WHEN TEAM_ASSIGNED = 'NM'    THEN 90
-                                                                END
-                              )
+ and M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY 
+                             from PAL_RPA 
+                             where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 90
+                                                                    WHEN TEAM_ASSIGNED = 'NM'    THEN 90
+                                                                    WHEN TEAM_ASSIGNED = 'STRAT' THEN 25 -- lines assinged to STRAT will be excluded from re-assingment until the following month.
+                                                               END
+                             ) 
 --exclude negative load lines 
   and (M.BL_MFG_CONT <>  'MCKB-NEG-LD' or M.BL_MFG_CONT is null) 
 --excluding the exclusions table
@@ -50,6 +52,13 @@ AND TO_CHAR(M.SHIP_TO)||TO_CHAR(M.ITEM_E1_NUM) NOT IN (SELECT DISTINCT   TO_CHAR
                                                        FROM MRGN_EU.MMR_EXCLUSIONS EX WHERE EX."Ship To" <> -1 
                                                        )   
 );
+
+--region INDEX pal_rpa_mmr_data --
+------------------
+--drop index MMR_WEEKLY_TXN_IDX1;
+--CREATE INDEX pal_rpa_mmr_data_IDX1 ON MRGN_EU.pal_rpa_mmr_data (ACCT_ITEM_KEY);   
+--end region
+
 
 --REGION log insert
 INSERT INTO PAL_EVENT_LOG 
@@ -199,7 +208,8 @@ WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PA
 FROM PAL_EVENT_LOG L
 join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
              AND S.PREV_TIME = L.NOW); commit;-- end region
-
+        
+/*THE MMR ALSO CREATES THIS SO I WILL USE THAT ONE. IF THE FOLLOWING STEPS TAKE A MUCH LONGER TIME I MAY STILL NEED A LIMITING STEP HERE WHERE I LIMIT THAT TABLE TO THESE ACCT ITEM KEYS
 --region 5 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (10 mins)
 INSERT INTO MRGN_EU.PAL_RPA_WEEKLY_TXN (ACCT_ITEM_KEY,SLS_3_MTH,NEG_SLS_3_MTH,QTY_3_MTH,CST_3_MTH,NEG_CST_3_MTH)
 select * from(
@@ -273,13 +283,46 @@ WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PA
               (SELECT COUNT(*) FROM PAL_RPA_WEEKLY_TXN)                       AS METRIC_VALUE
 FROM PAL_EVENT_LOG L
 join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
-             AND S.PREV_TIME = L.NOW); commit;-- end region
+             AND S.PREV_TIME = L.NOW); commit;-- end region         
+--end region 
+*/
+
+--region 5 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (1 minute)
+INSERT INTO MRGN_EU.PAL_RPA_WEEKLY_TXN (ACCT_ITEM_KEY,SLS_3_MTH,NEG_SLS_3_MTH,QTY_3_MTH,CST_3_MTH,NEG_CST_3_MTH)
+select * from(
+--REGION pal_rpa_mmr_data MINUS cct CASES Subtract CCT cases from MAIN to leave lines for STRAT and NM teams and then divide into STRAT and NM
+with CASES AS(SELECT *
+              FROM (Select ACCT_ITEM_KEY from pal_rpa_mmr_data
+                           MINUS 
+                    Select ACCT_ITEM_KEY from PAL_RPA_2G))--END REGION
+SELECT distinct sls.ACCT_ITEM_KEY, sls.SLS_3_MTH, sls.NEG_SLS_3_MTH, sls.QTY_3_MTH, sls.CST_3_MTH, sls.NEG_CST_3_MTH
+FROM CASES RPA
+JOIN MRGN_EU.MMR_WEEKLY_TXN sls ON sls.ACCT_ITEM_KEY =  RPA.ACCT_ITEM_KEY);
+
+--REGION log insert
+INSERT INTO PAL_EVENT_LOG 
+       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
+SELECT * FROM(
+WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME)
+     SELECT  S.PREV_TIME                    AS START_,
+             SYSDATE                        AS NOW, 
+             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
+             'MMR, RPA'                     AS APPLICATION_NAME, 
+             'RPA'                          AS PROCESS_NAME, 
+             'CREATE'                       AS PROCESS_TYPE, 
+             'PAL_RPA_WEEKLY_TXN'             AS EVENT_ACTION, 
+             'SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis'       AS ACTION_DESCRIPTION,
+             'ROW_COUNT'                    AS METRIC_NAME, 
+              (SELECT COUNT(*) FROM PAL_RPA_WEEKLY_TXN)                       AS METRIC_VALUE
+FROM PAL_EVENT_LOG L
+join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
+             AND S.PREV_TIME = L.NOW); commit;-- end region         
 --end region 
 
 --region 6 PAL_RPA_CASES: COLLECT STRAT E1, STRAT AS400 AND NM CASES AND UNION ALL CASE GROUPS
 INSERT INTO PAL_RPA_CASES
 SELECT * FROM (
---region 3a ADD POOL TO MAIN, need to filter to e1 data only
+--region 3a ADD POOL TO MAIN
 WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                            x.VENDOR_NAME
                            ,P.POOL_NUM
@@ -305,8 +348,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                    FROM PAL_RPA_3A A
                         join (Select ACCT_ITEM_KEY from PAL_RPA_3A
                                      MINUS 
-                              Select ACCT_ITEM_KEY from PAL_RPA_2h) x on A.ACCT_ITEM_KEY = x.ACCT_ITEM_KEY),--END REGION
-------11/4/20 ADDED AS400 DATA HERE USING MASTER GROUP #'S AS POOLS AND CASE COUNTERS-------     
+                              Select ACCT_ITEM_KEY from PAL_RPA_2h) x on A.ACCT_ITEM_KEY = x.ACCT_ITEM_KEY),--END REGION 
 --REGION 3C STRAT E1 CASES ONE OF THE CASE GROUPS
     PAL_RPA_3C AS (SELECT B.ACCT_ITEM_KEY, 
                           '3' as case_prefix, 
@@ -314,16 +356,11 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                           'STRAT' as Team_Assigned,
                           B.POOL_NUM 
                    FROM PAL_RPA_3B B
-                   WHERE B.POOL_NUM IS NOT NULL),  --END REGION
-                   /*remove as400 delete after 5/1/21
---REGION 3D STRAT AS400 CASES ONE OF THE CASE GROUPS
-     PAL_RPA_3D AS (SELECT D.ACCT_ITEM_KEY, 
-                           '3' as case_prefix, 
-                           D.MSTR_GRP_NUM AS CASE_CNTR,
-                           'STRAT' as Team_Assigned,
-                           D.MSTR_GRP_NUM AS POOL_NUM
-                    FROM PAL_RPA_AS400 D), --END REGION     
-                    */
+                   WHERE B.POOL_NUM IS NOT NULL
+                   --exlcuding my previously assigned lines for Strat, they want everything once a month and they work the case like a project, but they work symphony records on a daily basis.     
+                   --I'm using bill_to because it's connected to a pool and this should exlcude all the lines connected to a pool if that acct has even one line in the dataset
+                    AND  B.POOL_NUM not in (Select distinct POOL_NUM from PAL_RPA  where INSRT_DT > trunc(sysdate) - 25) --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
+                   ),  --END REGION
 --REGION 4A NM SIDE TOP 10 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
    PAL_RPA_4a AS (SELECT NEG_SLS_3_MTH,
                          HIGHEST_CUST_NAME,
@@ -337,7 +374,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                                       B.VENDOR_NAME,
                                       SUM(W.NEG_SLS_3_MTH) NEG_SLS_3_MTH
                                 FROM PAL_RPA_3B B
-                                JOIN PAL_RPA_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
+                                JOIN MRGN_EU.MMR_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
                               WHERE B.POOL_NUM IS NULL
                                     AND W.NEG_SLS_3_MTH > 0
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
@@ -361,12 +398,9 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
 SELECT * FROM PAL_RPA_2h
 UNION
 SELECT * FROM PAL_RPA_3C
-/*remove as400 delete after 5/1/21
 UNION
-SELECT * FROM PAL_RPA_3D
-*/
-UNION
-SELECT * FROM PAL_RPA_4B);--end region
+SELECT * FROM PAL_RPA_4B);--end region 
+
 
 --REGION log insert
 INSERT INTO PAL_EVENT_LOG 
@@ -390,10 +424,6 @@ join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
 
 --region truncate PAL_RPA_MMR_DATA, PAL_RPA_E1, PAL_RPA_AS400, and PAL_RPA_2g
 truncate table PAL_RPA_MMR_DATA;
-/*remove as400 delete after 5/1/21
-truncate table PAL_RPA_AS400;
-*/
-truncate table PAL_RPA_E1;
 truncate table PAL_RPA_2g;COMMIT;--end region
 
 --REGION 7 IPC (15min) 
@@ -788,7 +818,7 @@ AND CC.ACTV_FLG = 'Y'
 );--END REGION
 
 --region 11 address
-insert into PAL_RPA_ADDRESS (SYS_PLTFRM,	BUS_PLTFRM,	CUST_KEY,	ADDRESS,	ADDRSS_LINE1,	ADDRSS_LINE2,	ADDRSS_LINE3,	ADDRSS_LINE4,	CITY,	STATE,	ZIP)
+insert into PAL_RPA_ADDRESS (BUS_PLTFRM,	CUST_KEY,	ADDRESS,	ADDRSS_LINE1,	ADDRSS_LINE2,	ADDRSS_LINE3,	ADDRSS_LINE4,	CITY,	STATE,	ZIP)
 SELECT * FROM(WITH 
 ADDRESS AS (SELECT DISTINCT a.BUS_PLTFRM, a.ACCT_OR_BILL_TO as CUST_KEY,
                              b.ADDRSS_LINE1, b.ADDRSS_LINE2, b.ADDRSS_LINE3, b.ADDRSS_LINE4, b.CITY, b.STATE, b.ZIP, 'N' as ALT_ADDRSS
@@ -835,7 +865,7 @@ SELECT * FROM (
                       JOIN ACCOUNTS ON C.CUST_E1_NUM = ACCOUNTS.SHIP_TO);--end region
 
 --region FINAL, JOIN ALL THE CASES AND EXTRA INFORMATION TO THE MMR-------- 1 mIns
-truncate table pal_rpa;
+--truncate table pal_rpa;
  INSERT INTO PAL_RPA
  (ACCT_ITEM_KEY,	SYS_PLTFRM,	BUS_PLTFRM,	HIGHEST_CUST_NAME,	ACCT_OR_BILL_TO,	ACCT_OR_BILL_TO_NAME,	SHIP_TO,	ST_NAME,	BID_OR_PRCA,	BID_OR_PRCA_NAME,	LPG_ID,	LPG_DESC,	PRICE_SOURCE_PCCA,	COT,	
  ADDRESS,	ADDRSS_LINE1,	ADDRSS_LINE2,	ADDRSS_LINE3,	ADDRSS_LINE4,	CITY,	STATE,	ZIP,	
@@ -851,9 +881,9 @@ truncate table pal_rpa;
  MSTR_GRP_NUM,	MSTR_GRP_NAME,	ACCT_MGR_NAME,	DECISION_MAKER,	
  LM_PERC_CAP,	LM_OPP_MRGN_PERC,	
  PNDG_MMR_OPP,	RES_MMR_OPP,	TEAM_ASSIGNED,	POOL_NUM,	MMR_CASE,	INSRT_DT,	CASE_CNTR,	POOL_NAME)
-
-
---CREATE TABLE PAL_RPA AS 
+/*
+drop table PAL_RPA_test;
+CREATE TABLE PAL_RPA_test AS */
 --I GROUPED THE FIELDS TO REVEAL REDUNDANCY. I HOPE TO LOSE SOME OF THESE.
 SELECT  distinct --REGION 
         -----------ACCT INFO-----------------
@@ -956,7 +986,7 @@ left join MRGN_EU.PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
 left JOIN MRGN_EU.PAL_ATTRBT_FLGS AF      ON M.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
 -------------------------------------------------
-left join MRGN_EU.PAL_RPA_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
+left join MRGN_EU.PAL_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
 ---------------------------------------------var cost excld flag---------------------------------------------------------
 left join MRGN_EU.PAL_RPA_EXCL_FLG  E     ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
                                          AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
@@ -993,12 +1023,21 @@ join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
 --end region
                      
 --region truncate THE TABLES I JUST USED BECASE I DON'T NEED THEM ANYMORE
-truncate table PAL_RPA_POOL;
-truncate table PAL_RPA_CASES;
-truncate table PAL_RPA_IPC;
-truncate table PAL_RPA_EXCL_FLG;
+truncate table MRGN_EU.PAL_RPA_POOL;
 truncate TABLE MRGN_EU.PAL_RPA_WEEKLY_TXN;
-truncate table PAL_ATTRBT_FLGS; 
-truncate TABLE PAL_RPA_GPO_DEA_HIN; 
-truncate TABLE PAL_RPA_ADDRESS;
-truncate TABLE PAL_RPA_COT;COMMIT;--end region
+truncate table MRGN_EU.PAL_RPA_CASES;
+truncate table MRGN_EU.PAL_RPA_IPC;
+truncate table MRGN_EU.PAL_RPA_EXCL_FLG;
+truncate table MRGN_EU.PAL_ATTRBT_FLGS; 
+truncate TABLE MRGN_EU.PAL_RPA_GPO_DEA_HIN; 
+truncate TABLE MRGN_EU.PAL_RPA_ADDRESS;
+truncate TABLE MRGN_EU.PAL_RPA_COT;COMMIT;--end region
+
+-----------------------------
+
+----------NOTES--------------
+
+-----------------------------
+/*MODIFYING TABLE PROPERTIES
+ ALTER TABLE PAL_RPA
+MODIFY POOL_NAME VARCHAR2(50);*/
