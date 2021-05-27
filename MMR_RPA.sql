@@ -289,15 +289,9 @@ join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
 
 --region 5 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (1 minute)
 INSERT INTO MRGN_EU.PAL_RPA_WEEKLY_TXN (ACCT_ITEM_KEY,SLS_3_MTH,NEG_SLS_3_MTH,QTY_3_MTH,CST_3_MTH,NEG_CST_3_MTH)
-select * from(
---REGION pal_rpa_mmr_data MINUS cct CASES Subtract CCT cases from MAIN to leave lines for STRAT and NM teams and then divide into STRAT and NM
-with CASES AS(SELECT *
-              FROM (Select ACCT_ITEM_KEY from pal_rpa_mmr_data
-                           MINUS 
-                    Select ACCT_ITEM_KEY from PAL_RPA_2G))--END REGION
 SELECT distinct sls.ACCT_ITEM_KEY, sls.SLS_3_MTH, sls.NEG_SLS_3_MTH, sls.QTY_3_MTH, sls.CST_3_MTH, sls.NEG_CST_3_MTH
-FROM CASES RPA
-JOIN MRGN_EU.MMR_WEEKLY_TXN sls ON sls.ACCT_ITEM_KEY =  RPA.ACCT_ITEM_KEY);
+FROM pal_rpa_mmr_data RPA
+JOIN MRGN_EU.MMR_WEEKLY_TXN sls ON sls.ACCT_ITEM_KEY =  RPA.ACCT_ITEM_KEY;
 
 --REGION log insert
 INSERT INTO PAL_EVENT_LOG 
@@ -375,7 +369,6 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                                       SUM(W.NEG_SLS_3_MTH) NEG_SLS_3_MTH
                                 FROM PAL_RPA_3B B
                                 JOIN MRGN_EU.PAL_RPA_WEEKLY_TXN W ON W.ACCT_ITEM_KEY = B.ACCT_ITEM_KEY
-
                               WHERE B.POOL_NUM IS NULL
                                     AND W.NEG_SLS_3_MTH > 0
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
@@ -976,6 +969,8 @@ SELECT  distinct --REGION
 --END REGION
 FROM MRGN_EU.MMR_STATUS_FINAL M 
 join MRGN_EU.PAL_RPA_CASES CASES          on M.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
+-------------------------------------------------
+join MRGN_eu.PAL_RPA_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = CASES.ACCT_ITEM_KEY
 left join mrgn_eu.PAL_RPA_COT COT         on COT.CUST_E1_NUM = M.SHIP_TO
 ----------------------------adding MIN_lpg_prca_cost, var cONT COST, VAR CONT NAME, VAR CONT TYPE,GPO NAME, PRIMARY GPO NAME LPG, PRCA, BID, and case assignments--------------------------------------------
 left JOIN MRGN_EU.PAL_RPA_IPC IPC         ON M.ACCT_ITEM_KEY = ipc.ACCT_ITEM_KEY
@@ -986,14 +981,14 @@ left JOIN MRGN_EU.PAL_RPA_POOL PN         ON PN.POOL_NUM        = CASES.POOL_NUM
 left join MRGN_EU.PAL_RPA_GPO_DEA_HIN GPO ON GPO.Ship_To = M.SHIP_TO
 ---------------------------------------------attr elig flag---------------------------------------------------------
 left JOIN MRGN_EU.PAL_ATTRBT_FLGS AF      ON M.ACCT_ITEM_KEY = AF.ACCT_ITEM_KEY 
--------------------------------------------------
-left join MRGN_EU.PAL_WEEKLY_TXN TXN  ON TXN.ACCT_ITEM_KEY = M.ACCT_ITEM_KEY
+
 ---------------------------------------------var cost excld flag---------------------------------------------------------
 left join MRGN_EU.PAL_RPA_EXCL_FLG  E     ON E.DIM_CUST_CURR_ID     = IPC.DIM_CUST_CURR_ID
                                          AND E.VrCst_CNTRCT_TIER_ID = IPC.VrCst_CNTRCT_TIER_ID
 LEFT JOIN MRGN_EU.PAL_RPA_ADDRESS ADDRESS on ADDRESS.BUS_PLTFRM = M.BUS_PLTFRM
                                          AND ADDRESS.CUST_KEY   = M.SHIP_TO
 ; commit;
+
 
 /*grants
  GRANT SELECT ON MRGN_EU.PAL_RPA TO e6582x6; --the STRAT bot
