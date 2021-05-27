@@ -374,7 +374,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
                                ) B
                               ORDER BY NEG_SLS_3_MTH DESC
-                              FETCH FIRST 10 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
+                              FETCH FIRST 20 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
                         )
                    ),--END REGION
 --REGION 4B NM CASE LINES ONE OF THE CASE GROUPS
