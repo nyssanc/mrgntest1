@@ -209,84 +209,6 @@ FROM PAL_EVENT_LOG L
 join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
              AND S.PREV_TIME = L.NOW); commit;-- end region
         
-/*THE MMR ALSO CREATES THIS SO I WILL USE THAT ONE. IF THE FOLLOWING STEPS TAKE A MUCH LONGER TIME I MAY STILL NEED A LIMITING STEP HERE WHERE I LIMIT THAT TABLE TO THESE ACCT ITEM KEYS
---region 5 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (10 mins)
-INSERT INTO MRGN_EU.PAL_RPA_WEEKLY_TXN (ACCT_ITEM_KEY,SLS_3_MTH,NEG_SLS_3_MTH,QTY_3_MTH,CST_3_MTH,NEG_CST_3_MTH)
-select * from(
---REGION pal_rpa_mmr_data MINUS cct CASES Subtract CCT cases from MAIN to leave lines for STRAT and NM teams and then divide into STRAT and NM
-with CASES AS(SELECT A.ACCT_ITEM_KEY
-                   FROM pal_rpa_mmr_data  A
-                        join (Select ACCT_ITEM_KEY from pal_rpa_mmr_data
-                                     MINUS 
-                              Select ACCT_ITEM_KEY from PAL_RPA_2G) x on A.ACCT_ITEM_KEY = x.ACCT_ITEM_KEY),--END REGION
- MMR_DAILY_TXN as (SELECT RPA.ACCT_ITEM_KEY,   
-                          sls.SHIP_TO, 
-                          sls.ITEM_E1_NUM, sls.ITEM_AS400_NUM, 
-                          sls.EXT_NET_SLS_AMT, 
-                          sls.SELL_UOM_SHIP_QTY, 
-                          sls.EXT_COGS_REP_MMS_AMT, 
-                          sls.TOTAL_REBATE, 
-                          sls.SYS_PLTFRM, 
-                          sls.TRANS_TYPE,  
-                          ROUND((sls.EXT_NET_SLS_AMT/sls.SELL_UOM_SHIP_QTY),2) AS PRICE,
-                          CASE WHEN sls.TRANS_TYPE IN ('E1', 'E1_PTNT') THEN ROUND(((sls.EXT_COGS_REP_MMS_AMT - sls.TOTAL_REBATE)/sls.SELL_UOM_SHIP_QTY),2) 
-                               WHEN sls.TRANS_TYPE = 'AS400' THEN ROUND((sls.EXT_COGS_REP_MMS_AMT /sls.SELL_UOM_SHIP_QTY),2) END AS COST,
-                          CASE WHEN sls.TRANS_TYPE IN ('E1', 'E1_PTNT') THEN (sls.EXT_NET_SLS_AMT - (sls.EXT_COGS_REP_MMS_AMT - sls.TOTAL_REBATE)) 
-                               WHEN sls.TRANS_TYPE = 'AS400' THEN (sls.EXT_NET_SLS_AMT - sls.EXT_COGS_REP_MMS_AMT) END AS GP_DOLLAR,     
-                          TO_NUMBER(TO_CHAR(TRUNC(TO_DATE(DIM_INV_DT_ID, 'YYYY/MM/DD'), 'iw') + 7 - 1/86400, 'YYYYMMDD')) as CAL_YR_WK
-                   FROM CASES RPA
-                   INNER JOIN MRGN_EU.MINI_FACT_SLS sls ON (CASE WHEN sls.SYS_PLTFRM = 'EC' THEN 'AS400' || sls.SHIP_TO || sls.BUS_PLTFRM || sls.ITEM_AS400_NUM
-                                                                 ELSE sls.SYS_PLTFRM || sls.SHIP_TO || sls.BUS_PLTFRM || sls.ITEM_E1_NUM END) = RPA.ACCT_ITEM_KEY
-                   WHERE sls.DIM_INV_DT_ID >= TO_NUMBER(TO_CHAR(SYSDATE-90,'YYYYMMDD')))
-SELECT DISTINCT 
-        ACCT_ITEM_KEY,
-        SUM (EXT_NET_SLS_AMT) OVER(PARTITION BY SHIP_TO, ITEM_E1_NUM)                                                    AS SLS_3_MTH,
-        SUM (CASE WHEN GP_DOLLAR < 0 THEN EXT_NET_SLS_AMT ELSE NULL END) OVER(PARTITION BY SHIP_TO, ITEM_E1_NUM)         AS NEG_SLS_3_MTH,
-        SUM (SELL_UOM_SHIP_QTY) OVER(PARTITION BY SHIP_TO, ITEM_E1_NUM)                                                  AS QTY_3_MTH,
-        SUM (CASE WHEN TRANS_TYPE IN ('E1', 'E1_PTNT') THEN (EXT_COGS_REP_MMS_AMT - TOTAL_REBATE) 
-                 WHEN TRANS_TYPE = 'AS400' THEN EXT_COGS_REP_MMS_AMT END) OVER(PARTITION BY SHIP_TO, ITEM_E1_NUM)        AS CST_3_MTH,
-        SUM (CASE WHEN GP_DOLLAR < 0 THEN
-                  CASE WHEN TRANS_TYPE IN ('E1', 'E1_PTNT') THEN (EXT_COGS_REP_MMS_AMT - TOTAL_REBATE) 
-                       WHEN TRANS_TYPE = 'AS400' THEN EXT_COGS_REP_MMS_AMT END
-                  ELSE NULL END) OVER(PARTITION BY SHIP_TO, ITEM_E1_NUM)                                                 AS NEG_CST_3_MTH
-FROM MMR_DAILY_TXN
-WHERE SYS_PLTFRM = 'E1'
-UNION ALL
-SELECT DISTINCT 
-ACCT_ITEM_KEY,
-SUM (EXT_NET_SLS_AMT) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS SLS_3_MTH,
-SUM (CASE WHEN GP_DOLLAR < 0 THEN EXT_NET_SLS_AMT ELSE NULL END) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS NEG_SLS_3_MTH,
-SUM (SELL_UOM_SHIP_QTY) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS QTY_3_MTH,
-SUM (CASE WHEN TRANS_TYPE IN ('E1', 'E1_PTNT') THEN (EXT_COGS_REP_MMS_AMT - TOTAL_REBATE) 
-         WHEN TRANS_TYPE = 'AS400' THEN EXT_COGS_REP_MMS_AMT END) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS CST_3_MTH,
-SUM (CASE WHEN GP_DOLLAR < 0 THEN
-          CASE WHEN TRANS_TYPE IN ('E1', 'E1_PTNT') THEN (EXT_COGS_REP_MMS_AMT - TOTAL_REBATE) 
-               WHEN TRANS_TYPE = 'AS400' THEN EXT_COGS_REP_MMS_AMT END
-          ELSE NULL END) OVER(PARTITION BY SHIP_TO, ITEM_AS400_NUM) AS NEG_CST_3_MTH
-FROM MMR_DAILY_TXN
-WHERE SYS_PLTFRM = 'EC');
-
---REGION log insert
-INSERT INTO PAL_EVENT_LOG 
-       (START_, NOW, DURATION_STRING, APPLICATION_NAME, PROCESS_NAME, PROCESS_TYPE, EVENT_ACTION, ACTION_DESCRIPTION, METRIC_NAME, METRIC_VALUE)
-SELECT * FROM(
-WITH START_ AS (SELECT MAX(NOW) AS PREV_TIME, PAL_EVENT_LOG.PROCESS_NAME FROM PAL_EVENT_LOG WHERE PROCESS_NAME ='RPA' GROUP BY PAL_EVENT_LOG.PROCESS_NAME)
-     SELECT  S.PREV_TIME                    AS START_,
-             SYSDATE                        AS NOW, 
-             SYSDATE - S.PREV_TIME          AS DURATION_STRING, 
-             'MMR, RPA'                     AS APPLICATION_NAME, 
-             'RPA'                          AS PROCESS_NAME, 
-             'CREATE'                       AS PROCESS_TYPE, 
-             'PAL_RPA_WEEKLY_TXN'             AS EVENT_ACTION, 
-             'SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis'       AS ACTION_DESCRIPTION,
-             'ROW_COUNT'                    AS METRIC_NAME, 
-              (SELECT COUNT(*) FROM PAL_RPA_WEEKLY_TXN)                       AS METRIC_VALUE
-FROM PAL_EVENT_LOG L
-join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
-             AND S.PREV_TIME = L.NOW); commit;-- end region         
---end region 
-*/
-
 --region 5 SUM of SLS/QTY/CST for Bill_TO/ITEM on Weekly & 3_MTH Basis (1 minute)
 INSERT INTO MRGN_EU.PAL_RPA_WEEKLY_TXN (ACCT_ITEM_KEY,SLS_3_MTH,NEG_SLS_3_MTH,QTY_3_MTH,CST_3_MTH,NEG_CST_3_MTH)
 SELECT distinct sls.ACCT_ITEM_KEY, sls.SLS_3_MTH, sls.NEG_SLS_3_MTH, sls.QTY_3_MTH, sls.CST_3_MTH, sls.NEG_CST_3_MTH
@@ -355,7 +277,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                    --I'm using bill_to because it's connected to a pool and this should exlcude all the lines connected to a pool if that acct has even one line in the dataset
                     AND  B.POOL_NUM not in (Select distinct POOL_NUM from PAL_RPA  where INSRT_DT > trunc(sysdate) - 25) --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
                    ),  --END REGION
---REGION 4A NM SIDE TOP 10 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
+--REGION 4A NM SIDE TOP 30 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
    PAL_RPA_4a AS (SELECT NEG_SLS_3_MTH,
                          HIGHEST_CUST_NAME,
                          VENDOR_NAME,
@@ -374,7 +296,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
                                ) B
                               ORDER BY NEG_SLS_3_MTH DESC
-                              FETCH FIRST 20 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
+                              FETCH FIRST 30 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
                         )
                    ),--END REGION
 --REGION 4B NM CASE LINES ONE OF THE CASE GROUPS
@@ -416,7 +338,7 @@ join START_ S ON S.PROCESS_NAME = L.PROCESS_NAME
              AND S.PREV_TIME = L.NOW); commit;-- end region
 --END REGION
 
---region truncate PAL_RPA_MMR_DATA, PAL_RPA_E1, PAL_RPA_AS400, and PAL_RPA_2g
+--region truncate PAL_RPA_MMR_DATA, and PAL_RPA_2g
 truncate table PAL_RPA_MMR_DATA;
 truncate table PAL_RPA_2g;COMMIT;--end region
 
@@ -464,7 +386,7 @@ SELECT * FROM (with CASES AS (select  RPA.*,
                                             AND CASES.ITEM         = A.ITEM
                                  WHERE A.VAR_COST = 'Y'
                                  --WHEN THE AQC COST IS THE LOWEST COST WE CAN HAVE A VARIABLE COST SITUATION WITH A NULL CONTRACT BEIGN THE LOWEST COST. i REMOVE ALL THOSE HERE
-                                   AND A.VRCST_CONT_FILTER not in ('0', '/*')
+                                   and A.VRCST_CONT_FILTER not in ('0', '/*','*')
                                    AND A.VRCST_CONT_FILTER IS NOT NULL
                                 ),--end region
 --region get the min cost of the lowest of the cost or price over the price source item group                                
@@ -476,7 +398,7 @@ SELECT * FROM (with CASES AS (select  RPA.*,
                                       AND CASES.ITEM = A.ITEM 
                                  WHERE a.VAR_COST = 'Y'
                                  --WHEN THE AQC COST IS THE LOWEST COST WE CAN HAVE A VARIABLE COST SITUATION WITH A NULL CONTRACT BEIGN THE LOWEST COST. i REMOVE ALL THOSE HERE
-                                   AND a.VRCST_CONT_FILTER not in ('0', '/*')
+                                   AND A.VRCST_CONT_FILTER not in ('0', '/*','*')
                                    AND a.VRCST_CONT_FILTER IS NOT NULL
                            group BY a.PRICE_SOURCE, a.ITEM
                            ),--end region
