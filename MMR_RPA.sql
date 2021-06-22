@@ -40,7 +40,7 @@ insert into pal_rpa_mmr_data
  WHERE M.PNDG_MMR_OPP > 0
  and M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY 
                              from PAL_RPA 
-                             where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 90
+                             where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 25
                                                                     WHEN TEAM_ASSIGNED = 'NM'    THEN 90
                                                                     WHEN TEAM_ASSIGNED = 'STRAT' THEN 25 -- lines assinged to STRAT will be excluded from re-assingment until the following month.
                                                                END
