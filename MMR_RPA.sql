@@ -126,8 +126,8 @@ PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                from PAL_RPA_2a
                WHERE MMR_TYPE in ('CCI','CCI/LM')
                GROUP BY BL_MFG_CONT, BUS_PLTFRM
-               HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 50000
-                                               WHEN BUS_PLTFRM = 'EC' THEN 20000 end)), --end region
+               HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 25000
+                                               WHEN BUS_PLTFRM = 'EC' THEN 10000 end)), --end region
 --region 2C: TOP 20 EntContByOpp$
 PAL_RPA_2c as (SELECT SUM_OPP, 
                       BL_MFG_CONT,
@@ -163,8 +163,8 @@ PAL_RPA_2f_1 as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                         ITEM_E1_NUM
                  from PAL_RPA_2e
                  GROUP BY ITEM_E1_NUM, BUS_PLTFRM
-                 HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 20000
-                                                 WHEN BUS_PLTFRM = 'EC' THEN 10000 end)
+                 HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 10000
+                                                 WHEN BUS_PLTFRM = 'EC' THEN 5000 end)
                 ), --end region
 --region 2F_2 TOP 10 Item increases by sumOpp$
 PAL_RPA_2f_2 as (SELECT SUM_OPP, 
