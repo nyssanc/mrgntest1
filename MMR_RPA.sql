@@ -128,7 +128,7 @@ PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                GROUP BY BL_MFG_CONT, BUS_PLTFRM
                HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 25000
                                                WHEN BUS_PLTFRM = 'EC' THEN 10000 end)), --end region
---region 2C: TOP 20 EntContByOpp$
+--region 2C: TOP 100 EntContByOpp$
 PAL_RPA_2c as (SELECT SUM_OPP, 
                       BL_MFG_CONT,
                       BUS_PLTFRM, --grouping by bus pltform was creating duplicate values so I need to join on it
@@ -138,57 +138,16 @@ PAL_RPA_2c as (SELECT SUM_OPP,
                             ,BUS_PLTFRM--grouping by bus pltform was creating duplicate values so I need to join on it
                      from PAL_RPA_2b
                      ORDER BY SUM_OPP DESC
-                     FETCH FIRST 20 ROWS ONLY)), --end region
---region 2D Top 20 Enterprise Cont Issues By Opp$, one of the tables to union
-PAL_RPA_2d as (Select A.ACCT_ITEM_KEY, 
-                     '1' as case_prefix,
-                     CASE_CNTR,
-                     'CCT' as Team_Assigned 
-              from PAL_RPA_2c C
-              join PAL_RPA_2a A on a.BL_MFG_CONT = C.BL_MFG_CONT
-                               and a.BUS_PLTFRM = c.BUS_PLTFRM), --end region
---region 2E Seperate the already assinged lines from the original data set and add new lower limits
-PAL_RPA_2e as (SELECT A.ACCT_ITEM_KEY, 
-                      A.BUS_PLTFRM,
-                      A.BL_MFG_CONT, 
-                      A.ITEM_E1_NUM, 
-                      A.COST_IMPACT
-              FROM PAL_RPA_2a A
-              join (Select BL_MFG_CONT from PAL_RPA_2a
-                           MINUS 
-                    Select BL_MFG_CONT from PAL_RPA_2b) x on A.BL_MFG_CONT = x.BL_MFG_CONT), --end region
---region 2F_1 Item Increase Issues
---THE F TABLESWERE SPLIT UP BECAUSE SO MUCH HAD ALREADY HAPPENED BELOW
-PAL_RPA_2f_1 as (SELECT SUM(COST_IMPACT) AS SUM_OPP,  
-                        ITEM_E1_NUM
-                 from PAL_RPA_2e
-                 GROUP BY ITEM_E1_NUM, BUS_PLTFRM
-                 HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 10000
-                                                 WHEN BUS_PLTFRM = 'EC' THEN 5000 end)
-                ), --end region
---region 2F_2 TOP 10 Item increases by sumOpp$
-PAL_RPA_2f_2 as (SELECT SUM_OPP, 
-                        ITEM_E1_NUM,
-                        ROWNUM+20 AS CASE_CNTR  --I WANT CASES 71-100 TO BE ITEM SO THAT'S WHERE ROW NUM WILL START.
-                 FROM (SELECT SUM_OPP, 
-                              ITEM_E1_NUM
-                       from PAL_RPA_2f_1
-                       ORDER BY SUM_OPP DESC
-                       FETCH FIRST 10 ROWS ONLY)), --end region
---region 2F  Top 10 Item increase issue cases, one of the tables to union
-PAL_RPA_2f as (Select E.ACCT_ITEM_KEY, 
-                     '2' as case_prefix,
-                     CASE_CNTR,
-                     'CCT' as Team_Assigned 
-              from PAL_RPA_2e  E
-              join PAL_RPA_2f_2 F on F.ITEM_E1_NUM = E.ITEM_E1_NUM) --end region
---region 2G UNION all cct cases
-SELECT * FROM PAL_RPA_2d
-  UNION
- SELECT * FROM PAL_RPA_2f
-); --end region 
-COMMIT;
---end region
+                     FETCH FIRST 100 ROWS ONLY)) --end region
+--region 2D Top 50 Enterprise Cont Issues By Opp$, one of the tables to union
+Select A.ACCT_ITEM_KEY, 
+       '1' as case_prefix,
+       CASE_CNTR,
+       'CCT' as Team_Assigned 
+from PAL_RPA_2c C
+join PAL_RPA_2a A on a.BL_MFG_CONT = C.BL_MFG_CONT
+                 and a.BUS_PLTFRM = c.BUS_PLTFRM --end region
+); COMMIT;--end region 
 
 --REGION log insert
 INSERT INTO PAL_EVENT_LOG 
@@ -277,7 +236,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                    --I'm using bill_to because it's connected to a pool and this should exlcude all the lines connected to a pool if that acct has even one line in the dataset
                     AND  B.POOL_NUM not in (Select distinct POOL_NUM from PAL_RPA  where INSRT_DT > trunc(sysdate) - 25) --for production, they want every case every month so there is no reason to limit today. In the future I hope to only give them their top N cases and then give them more later
                    ),  --END REGION
---REGION 4A NM SIDE TOP 30 PNDG_MMR_OPP by Cust/Vend FROM LEFTOVERS
+--REGION 4A NM SIDE TOP 30 NEG_SLS_3_MTH by Cust/Vend FROM LEFTOVERS
    PAL_RPA_4a AS (SELECT NEG_SLS_3_MTH,
                          HIGHEST_CUST_NAME,
                          VENDOR_NAME,
