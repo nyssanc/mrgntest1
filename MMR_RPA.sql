@@ -38,13 +38,14 @@ insert into pal_rpa_mmr_data
  --exlcuding my previously assigned lines for NM and CCT, they get weekly assignments so it's enough to not reassign a line to a case for 3 months. 
 --Strat lines are excluded from re-assignment here, but I also exclude Strat acct's in region 6 PAL_RPA_CASES
  WHERE M.PNDG_MMR_OPP > 0
+ 
  and M.ACCT_ITEM_KEY not in (Select ACCT_ITEM_KEY 
                              from PAL_RPA 
                              where INSRT_DT > trunc(sysdate) - CASE WHEN TEAM_ASSIGNED = 'CCT'   THEN 25
                                                                     WHEN TEAM_ASSIGNED = 'NM'    THEN 90
                                                                     WHEN TEAM_ASSIGNED = 'STRAT' THEN 25 -- lines assinged to STRAT will be excluded from re-assingment until the following month.
                                                                END
-                             ) 
+                             )
 --exclude negative load lines 
   and (M.BL_MFG_CONT <>  'MCKB-NEG-LD' or M.BL_MFG_CONT is null) 
 --excluding the exclusions table
@@ -126,8 +127,9 @@ PAL_RPA_2b as (SELECT SUM(COST_IMPACT) AS SUM_OPP,
                from PAL_RPA_2a
                WHERE MMR_TYPE in ('CCI','CCI/LM')
                GROUP BY BL_MFG_CONT, BUS_PLTFRM
+               /*
                HAVING SUM(COST_IMPACT) > (CASE WHEN BUS_PLTFRM = 'PC' THEN 25000
-                                               WHEN BUS_PLTFRM = 'EC' THEN 10000 end)), --end region
+                                               WHEN BUS_PLTFRM = 'EC' THEN 10000 end)*/), --end region
 --region 2C: TOP 100 EntContByOpp$
 PAL_RPA_2c as (SELECT SUM_OPP, 
                       BL_MFG_CONT,
@@ -213,7 +215,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                           G.TEAM_ASSIGNED,
                           A.POOL_NUM
                    FROM PAL_RPA_2g G
-                        join PAL_RPA_3A A on G.ACCT_ITEM_KEY = A.ACCT_ITEM_KEY),--end region
+                   LEFT join PAL_RPA_3A A on G.ACCT_ITEM_KEY = A.ACCT_ITEM_KEY),--end region
 --REGION 3b MAIN MINUS cct CASES Subtract CCT cases from MAIN to leave lines for STRAT and NM teams and then divide into STRAT and NM
      PAL_RPA_3b as(SELECT A.ACCT_ITEM_KEY,  
                           A.POOL_NUM,
@@ -255,7 +257,7 @@ WITH PAL_RPA_3A AS( select x.HIGHEST_CUST_NAME,
                               group by B.HIGHEST_CUST_NAME, B.VENDOR_NAME
                                ) B
                               ORDER BY NEG_SLS_3_MTH DESC
-                              FETCH FIRST 30 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
+                              FETCH FIRST 10 ROWS ONLY --SWTICHED THIS TO LOWER PER REQUEST FROM NM TEAM 2/25/21
                         )
                    ),--END REGION
 --REGION 4B NM CASE LINES ONE OF THE CASE GROUPS
